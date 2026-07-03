@@ -108,7 +108,7 @@ kerf/
 ├── python/kerf/                     # Python package (imports kerf._kerf)
 ├── examples/                        # sample.gcode + verify.py
 ├── docs/                            # research + design record (verify everything here)
-│   ├── 00-thesis.md .. 07-design-review.md
+│   ├── 00-thesis.md .. 08-semantics.md
 │   └── sources.md
 ├── rust-toolchain.toml
 └── .github/workflows/ci.yml         # Linux job: fmt + clippy + workspace tests + CLI smoke + wheel
@@ -169,7 +169,9 @@ tests + property/fuzz pass + 4 machine-checked Kani proofs, clippy clean, CI cov
 - **`kerf diff`** — compare two files by the material they deposit ("do these two slicers make the
   same part?"), with a `has_geometry`-style guard so two unparseable files never read as a match.
 - A **`kerf` CLI** (verify / inspect / diff) and a **JSON boundary** for Python; abi3 bindings.
-- Usable performance: a 24k-move / 200-layer file verifies in ~0.5 s (release).
+- Usable performance: a 24k-move file verifies in ~0.5 s and a 100k-move / 200-layer file in ~4 s
+  (release). The reference rasterizer prunes each segment's scan to the covered band and fans out
+  across layers — a ~5× speedup that provably does not change the marked set (differential test).
 
 ## Known limitations (documented, not hidden)
 
@@ -187,6 +189,6 @@ tests + property/fuzz pass + 4 machine-checked Kani proofs, clippy clean, CI cov
 
 The design record and remaining future work are in [`docs/06-architecture.md`](docs/06-architecture.md)
 and [`docs/07-design-review.md`](docs/07-design-review.md). Genuinely-remaining work toward a
-production tool: scale/perf for 100k+-move prints; a 3-OS + wheel publish matrix; and — the big
-research target — lifting the now-discharged bounded (Kani) proofs of the kernels toward a
-semantics-level, mechanized end-to-end proof over exact geometry (`docs/08-semantics.md` §6).
+production tool: a 3-OS + wheel publish matrix; and — the big research target — lifting the
+now-discharged bounded (Kani) proofs of the kernels toward a semantics-level, mechanized end-to-end
+proof over exact geometry (`docs/08-semantics.md` §6).

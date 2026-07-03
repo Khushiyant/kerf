@@ -4,6 +4,14 @@ All notable changes to Kerf are documented here. Versions follow [SemVer](https:
 
 ## [Unreleased]
 
+### Performance
+- **~5× faster verification, provably identical output.** The reference rasterizer now (1) prunes each
+  segment's per-row column scan to the covered band (cells whose perpendicular distance to the segment's
+  line is within reach — a superset of the covered interval, still decided by the exact predicate) and
+  (2) rasterizes independent layers in parallel (rayon). A 100k-move / 200-layer print went from ~20 s
+  to ~4 s. `optimized_raster_marks_exactly_the_bruteforce_set` differential-tests that the marked set is
+  unchanged over thousands of random segments.
+
 ### Added (verification)
 - **Machine-checked (bounded) proofs via Kani.** Four `#[cfg(kani)]` harnesses, all verified by
   `cargo kani -p kerf-core`: `canon_seg_is_order_independent` (the mechanism of reversal invariance,

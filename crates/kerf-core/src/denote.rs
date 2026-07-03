@@ -5,8 +5,12 @@
 //! the polyline with a disk of diameter `width_um`) and the swept regions are unioned within a layer.
 //! Travel denotes nothing.
 //!
-//! This is the REFERENCE semantics: correctness-first, not speed-first. It rasterizes onto the
-//! integer-micron lattice at a chosen resolution and is intentionally slow.
+//! This is the REFERENCE semantics: correctness-first. It rasterizes onto the integer-micron lattice
+//! at a chosen resolution. Two optimizations keep it usable at scale *without changing the marked set*
+//! (both pinned by `optimized_raster_marks_exactly_the_bruteforce_set`): each segment's per-row column
+//! scan is restricted to the covered band (perpendicular-distance prune in [`mark_capsule`]), and
+//! layers — being independent — are rasterized in parallel. A ~100k-move print verifies in a few
+//! seconds; the meaning is unchanged, only the wasted work is removed.
 //!
 //! # What the oracle guarantees (and what it does not)
 //!
@@ -35,6 +39,9 @@
 //! (rasterized coverage vs. exact swept region) remains provisional — see `docs/07-design-review.md`.
 
 use std::collections::BTreeSet;
+
+#[cfg(not(kani))]
+use rayon::prelude::*;
 
 use crate::ir::{hi, lo, Point, Polyline};
 
@@ -105,10 +112,48 @@ fn mark_capsule(cells: &mut BTreeSet<(i64, i64)>, p: Point, q: Point, half: f64,
     let af = (a.x as f64, a.y as f64);
     let bf = (b.x as f64, b.y as f64);
     let half_r = (r / 2) as f64;
-    for ci in minx.div_euclid(r)..=maxx.div_euclid(r) {
-        for cj in miny.div_euclid(r)..=maxy.div_euclid(r) {
+    let rf = r as f64;
+    let (ci0, ci1) = (minx.div_euclid(r), maxx.div_euclid(r));
+    let (cj0, cj1) = (miny.div_euclid(r), maxy.div_euclid(r));
+    let (dx, dy) = (bf.0 - af.0, bf.1 - af.1);
+    let len = (dx * dx + dy * dy).sqrt();
+    // Iterate rows; per row, restrict the tested columns to a *superset* of the covered interval —
+    // those cells whose PERPENDICULAR distance to the infinite line a-b is within `reach`. Because
+    // distance-to-segment >= perpendicular-distance-to-line, that band contains every covered cell, and
+    // each candidate is still decided by the exact `dist2_point_seg` predicate below, so the marked set
+    // is byte-for-byte identical to a full bounding-box scan — this only skips provably-empty columns
+    // (the bulk of the box for a diagonal segment). A near-horizontal / degenerate segment falls back
+    // to the full row.
+    for cj in cj0..=cj1 {
+        let cy = cj as f64 * rf + half_r;
+        let (mut lo, mut hi) = (ci0, ci1);
+        if len > 0.0 {
+            // Perp. distance of (x, cy) to the line: |(-dy)(x-ax) + dx(cy-ay)| / len <= reach.
+            let a_coef = -dy;
+            let bconst = dx * (cy - af.1);
+            if a_coef != 0.0 {
+                let rlen = reach * len;
+                let x1 = af.0 + (-rlen - bconst) / a_coef;
+                let x2 = af.0 + (rlen - bconst) / a_coef;
+                let (xlo, xhi) = if x1 <= x2 { (x1, x2) } else { (x2, x1) };
+                // x = ci*r + half_r  =>  ci = (x - half_r) / r. Round the interval outward, clamp into
+                // the bbox range in f64 (avoids an i64-cast overflow for extreme coordinates), then
+                // widen by one cell as a float-rounding guard.
+                let clo = ((xlo - half_r) / rf).floor().max(ci0 as f64) as i64;
+                let chi = ((xhi - half_r) / rf).ceil().min(ci1 as f64) as i64;
+                lo = clo.saturating_sub(1).max(ci0);
+                hi = chi.saturating_add(1).min(ci1);
+            } else if (cy - af.1).abs() > reach {
+                // Horizontal segment: the whole row is beyond reach.
+                continue;
+            }
+        }
+        if lo > hi {
+            continue;
+        }
+        for ci in lo..=hi {
             // Compute the cell centre in f64: `ci * r` would overflow i64 for extreme coordinates.
-            let center = (ci as f64 * r as f64 + half_r, cj as f64 * r as f64 + half_r);
+            let center = (ci as f64 * rf + half_r, cy);
             if dist2_point_seg(center, af, bf) <= reach2 {
                 cells.insert((ci, cj));
             }
@@ -147,28 +192,43 @@ fn occupancy_of(paths: &[(&Polyline, i64)], z_um: i64, resolution_um: i64) -> La
 /// promised. "Preserves `denote`" therefore means "deposits the same material," not "fills the region
 /// it claims to." Verifying fill-vs-boundary agreement is a separate (future) property.
 pub fn denote_hi(program: &hi::Program, resolution_um: i64) -> Occupancy {
-    let layers = program
-        .layers
-        .iter()
-        .map(|layer| {
+    Occupancy {
+        layers: map_layers(&program.layers, |layer| {
             let paths: Vec<(&Polyline, i64)> = layer
                 .regions
                 .iter()
                 .flat_map(|reg| reg.fills.iter().map(|f| (&f.path, f.width_um)))
                 .collect();
             occupancy_of(&paths, layer.z_um, resolution_um)
-        })
-        .collect();
-    Occupancy { layers }
+        }),
+    }
+}
+
+/// Map each layer to its occupancy. Layers are independent, so this fans out across cores; the
+/// order-preserving collect keeps the result identical to a serial map (a `denote` value is a
+/// deterministic function of the program). Serial under Kani to keep the proof build dependency-light.
+#[cfg(not(kani))]
+fn map_layers<L, F>(layers: &[L], f: F) -> Vec<LayerOccupancy>
+where
+    L: Sync,
+    F: Fn(&L) -> LayerOccupancy + Sync + Send,
+{
+    layers.par_iter().map(f).collect()
+}
+
+#[cfg(kani)]
+fn map_layers<L, F>(layers: &[L], f: F) -> Vec<LayerOccupancy>
+where
+    F: Fn(&L) -> LayerOccupancy,
+{
+    layers.iter().map(f).collect()
 }
 
 /// Denote a low-level program: union the swept material of every extruding toolpath, per layer.
 /// Travel contributes nothing.
 pub fn denote_lo(program: &lo::Program, resolution_um: i64) -> Occupancy {
-    let layers = program
-        .layers
-        .iter()
-        .map(|layer| {
+    Occupancy {
+        layers: map_layers(&program.layers, |layer| {
             let paths: Vec<(&Polyline, i64)> = layer
                 .toolpaths
                 .iter()
@@ -176,9 +236,8 @@ pub fn denote_lo(program: &lo::Program, resolution_um: i64) -> Occupancy {
                 .map(|t| (&t.path, t.width_um))
                 .collect();
             occupancy_of(&paths, layer.z_um, resolution_um)
-        })
-        .collect();
-    Occupancy { layers }
+        }),
+    }
 }
 
 /// The first non-redundant verification artifact: *lowering preserves denotation*.
@@ -407,6 +466,55 @@ mod tests {
             checked > 40_000,
             "expected a large exhaustive sweep, got {checked}"
         );
+    }
+
+    #[test]
+    fn optimized_raster_marks_exactly_the_bruteforce_set() {
+        // Safety net for the perpendicular-band column pruning in `mark_capsule`: it must mark EXACTLY
+        // the cells a full bounding-box scan marks — the optimization changes speed, never meaning.
+        // Uses the real private `canon_seg` / `dist2_point_seg` so the brute reference is bit-identical.
+        fn brute(a: Point, b: Point, width_um: i64, r: i64) -> BTreeSet<(i64, i64)> {
+            let (a, b) = canon_seg(a, b);
+            let half = width_um.max(0) as f64 / 2.0;
+            let reach = half + (r as f64) * std::f64::consts::FRAC_1_SQRT_2;
+            let pad = reach.ceil() as i64;
+            let reach2 = reach * reach;
+            let half_r = (r / 2) as f64;
+            let (af, bf) = ((a.x as f64, a.y as f64), (b.x as f64, b.y as f64));
+            let (minx, maxx) = (a.x.min(b.x) - pad, a.x.max(b.x) + pad);
+            let (miny, maxy) = (a.y.min(b.y) - pad, a.y.max(b.y) + pad);
+            let mut s = BTreeSet::new();
+            for ci in minx.div_euclid(r)..=maxx.div_euclid(r) {
+                for cj in miny.div_euclid(r)..=maxy.div_euclid(r) {
+                    let c = (ci as f64 * r as f64 + half_r, cj as f64 * r as f64 + half_r);
+                    if dist2_point_seg(c, af, bf) <= reach2 {
+                        s.insert((ci, cj));
+                    }
+                }
+            }
+            s
+        }
+        let mut st = 0x1234_5678u64;
+        let mut rng = || {
+            st = st
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (st >> 33) as i64
+        };
+        for _ in 0..4000 {
+            let a = Point::new(rng().rem_euclid(4000), rng().rem_euclid(4000));
+            let b = Point::new(rng().rem_euclid(4000), rng().rem_euclid(4000));
+            let w = rng().rem_euclid(800);
+            let r = 1 + rng().rem_euclid(400);
+            let opt = denote_hi(&single_path(vec![a, b], w), r).layers[0]
+                .cells
+                .clone();
+            assert_eq!(
+                opt,
+                brute(a, b, w, r),
+                "mismatch a={a:?} b={b:?} w={w} r={r}"
+            );
+        }
     }
 
     #[test]
