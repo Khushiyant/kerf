@@ -1,0 +1,28 @@
+[package]
+name = "kerf-api"
+description = "HTTP API + dashboard for the Kerf platform: submit verify/diff jobs, retrieve immutable results."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+publish = false
+
+[[bin]]
+name = "kerf-serve"
+path = "src/main.rs"
+
+[dependencies]
+kerf-store = { path = "../kerf-store" }
+kerf-queue = { path = "../kerf-queue" }
+kerf-worker = { path = "../kerf-worker" }
+axum = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "sync"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"

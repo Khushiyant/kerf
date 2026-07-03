@@ -7,6 +7,8 @@ members = [
     "crates/kerf-engine",
     "crates/kerf-store",
     "crates/kerf-queue",
+    "crates/kerf-api",
+    "crates/kerf-worker",
 ]
 
 [workspace.package]
