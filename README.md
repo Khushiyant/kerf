@@ -157,9 +157,11 @@ tests + property/fuzz pass, clippy clean, CI covers the workspace + CLI + wheel)
 - The self-lowering-soundness **oracle** — reversal-invariant, conservative coverage (hardened after
   the soundness review found real bugs; see `docs/07`).
 - The first real optimization **pass** (`TravelOrder`), checked by the oracle (cuts demo travel ~62%).
-- A **G-code parser frontend** that reads real Cura / PrusaSlicer / OrcaSlicer output into the IR,
-  including **arc (G2/G3) flattening** (I/J and R forms) — never panics on untrusted input
-  (property-fuzzed), with a trust boundary and diagnostics.
+- A **G-code parser frontend** that reads real Cura / PrusaSlicer / OrcaSlicer / BambuStudio /
+  Simplify3D output into the IR, including **arc (G2/G3) flattening** (I/J and R forms) — never panics
+  on untrusted input (property-fuzzed), with a trust boundary and diagnostics. **Validated on real
+  files** from all of the above (incl. a 136k-line PrusaSlicer Benchy and ArcWelder arcs); two
+  real-world layer/role vocabulary gaps found and fixed this way (see `CHANGELOG.md`).
 - **`verify_gcode`** — the delta beyond GlitchFinder: on *real parsed slicer geometry*, check that a
   Kerf pass preserves the deposited material **and** a second metamorphic relation (translation).
 - **`kerf diff`** — compare two files by the material they deposit ("do these two slicers make the
