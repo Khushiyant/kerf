@@ -23,6 +23,7 @@ services:
     environment:
       KERF_ADDR: 0.0.0.0:8080
       KERF_API_KEY: ${KERF_API_KEY:-dev-key}
+      KERF_READER_KEY: ${KERF_READER_KEY:-read-key}
       KERF_TENANT: ${KERF_TENANT:-default}
       DATABASE_URL: postgres://kerf:kerf@postgres:5432/kerf
     depends_on:
