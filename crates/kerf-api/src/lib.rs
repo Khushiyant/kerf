@@ -312,26 +312,52 @@ async fn dashboard() -> Html<&'static str> {
 
 const DASHBOARD_HTML: &str = r#"<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>Kerf</title>
-<style>body{font:14px system-ui;margin:2rem;max-width:52rem}textarea{width:100%;height:9rem}
-pre{background:#f4f4f4;padding:1rem;overflow:auto}input,button{font:inherit;padding:.3rem}</style></head>
-<body><h1>Kerf</h1><p>Verify G-code by the material it deposits.</p>
-<p>API key <input id="key" value="dev-key"> resolution µm <input id="res" value="200" size="5"></p>
+<style>
+body{font:14px system-ui;margin:2rem;max-width:60rem}
+textarea{width:100%;height:8rem}
+pre{background:#f4f4f4;padding:1rem;overflow:auto}
+input,button{font:inherit;padding:.3rem}
+table{border-collapse:collapse;width:100%;margin:.5rem 0}
+th,td{border:1px solid #ddd;padding:.3rem .5rem;text-align:left;font-size:13px}
+tr.regress td{color:#c22}
+h2{margin-top:1.5rem}
+</style></head>
+<body>
+<h1>Kerf</h1><p>Verify G-code by the material it deposits.</p>
+<p>API key <input id="key" value="dev-key"> resolution µm <input id="res" value="200" size="5">
+<button onclick="refresh()">Refresh</button></p>
 <textarea id="g" placeholder="paste G-code here"></textarea>
-<p><button onclick="run()">Verify</button></p><pre id="out">(result appears here)</pre>
+<p><button onclick="run()">Verify</button></p>
+<pre id="out">(result appears here)</pre>
+<h2>Recent jobs</h2>
+<table id="jobs"><thead><tr><th>id</th><th>kind</th><th>status</th><th>result</th></tr></thead><tbody></tbody></table>
+<h2>Regression alerts</h2>
+<table id="alerts"><thead><tr><th>id</th><th>project</th><th>IoU</th><th>message</th></tr></thead><tbody></tbody></table>
 <script>
+const key=()=>document.getElementById('key').value;
+const H=()=>({'x-api-key':key()});
 async function run(){
- const key=document.getElementById('key').value, res=+document.getElementById('res').value;
- const out=document.getElementById('out'); out.textContent='submitting...';
- const h={'content-type':'application/json','x-api-key':key};
- let r=await fetch('/v1/verify',{method:'POST',headers:h,body:JSON.stringify({gcode:document.getElementById('g').value,resolution_um:res})});
+ const res=+document.getElementById('res').value, out=document.getElementById('out'); out.textContent='submitting...';
+ let r=await fetch('/v1/verify',{method:'POST',headers:{'content-type':'application/json',...H()},body:JSON.stringify({gcode:document.getElementById('g').value,resolution_um:res})});
  if(!r.ok){out.textContent='error '+r.status;return}
  const {job_id}=await r.json();
  for(let i=0;i<50;i++){await new Promise(s=>setTimeout(s,120));
-  const j=await(await fetch('/v1/jobs/'+job_id,{headers:{'x-api-key':key}})).json();
-  if(j.status==='done'){const res=await(await fetch('/v1/results/'+j.result_id,{headers:{'x-api-key':key}})).json();
-   out.textContent=JSON.stringify(res.envelope.summary,null,2)+'\n\ndigest '+res.result_digest;return}}
+  const j=await(await fetch('/v1/jobs/'+job_id,{headers:H()})).json();
+  if(j.status==='done'){const rr=await(await fetch('/v1/results/'+j.result_id,{headers:H()})).json();
+   out.textContent=JSON.stringify(rr.envelope.summary,null,2)+'\n\ndigest '+rr.result_digest; refresh(); return}}
  out.textContent='timed out waiting for worker';
 }
+async function refresh(){
+ try{
+  const jobs=await(await fetch('/v1/jobs',{headers:H()})).json();
+  document.querySelector('#jobs tbody').innerHTML=jobs.slice(-20).reverse()
+    .map(j=>`<tr><td>${j.id}</td><td>${j.spec.kind}</td><td>${j.status}</td><td>${j.result_id??''}</td></tr>`).join('');
+  const alerts=await(await fetch('/v1/alerts',{headers:H()})).json();
+  document.querySelector('#alerts tbody').innerHTML=alerts.slice(-20).reverse()
+    .map(a=>`<tr class=regress><td>${a.id}</td><td>${a.project}</td><td>${a.iou==null?'':a.iou.toFixed(3)}</td><td>${a.message}</td></tr>`).join('');
+ }catch(e){}
+}
+refresh();
 </script></body></html>"#;
 
 #[cfg(test)]
