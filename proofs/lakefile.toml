@@ -1,0 +1,9 @@
+name = "kerf_proofs"
+defaultTargets = ["KerfProofs"]
+
+# Deliberately no Mathlib dependency: the model is the discrete lattice occupancy Kerf actually
+# computes, and the proofs use only Lean core + elementary induction, so `lake build` is fast and the
+# trusted base is minimal.
+
+[[lean_lib]]
+name = "KerfProofs"

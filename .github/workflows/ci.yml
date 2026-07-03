@@ -32,10 +32,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       # Model-checks the #[cfg(kani)] harnesses in kerf-core (reversal-invariance mechanism, distance
-      # non-negativity, parser float→micron safety). See docs/08-semantics.md §5.
+      # non-negativity, parser float→micron safety). See docs/08-semantics.md §5b.
       - uses: model-checking/kani-github-action@v1
         with:
           args: "-p kerf-core"
+
+  lean-proofs:
+    name: lean proofs (P1–P4)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # `lake build` runs the Lean kernel over proofs/KerfProofs.lean; success == the unbounded proofs
+      # of P1–P4 check with no `sorry`. See docs/08-semantics.md §5a and proofs/README.md.
+      - uses: leanprover/lean-action@v1
+        with:
+          lake-package-directory: "proofs"
 
   wheels:
     name: build wheels (${{ matrix.os }})

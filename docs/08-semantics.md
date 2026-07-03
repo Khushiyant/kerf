@@ -79,10 +79,26 @@ proving the oracle rejects a pass that drops material.
 - **Not machine-checked.** The arguments above are proof *sketches* discharged by property/metamorphic
   tests over bounded random inputs, not a mechanized proof. This is the honest status.
 
-## 5. What is already machine-checked (Kani, bounded)
+## 5. What is machine-checked
 
-The first proofs are discharged — not sketches. Running `cargo kani -p kerf-core` model-checks these
-harnesses (in `denote.rs` / `frontend/gcode.rs`, `#[cfg(kani)]`); all four verify:
+### 5a. P1–P4, proved unbounded in Lean 4 (`proofs/`)
+
+The soundness properties are no longer sketches or samples — they are **proved for arbitrary programs**
+in Lean 4 (`proofs/KerfProofs.lean`). `lake build` runs the kernel; the four theorems
+`reversal_invariant` (P1), `translation_invariant` (P2), `lowering_sound` (P3), `pass_sound` (P4) depend
+only on `propext` + `Quot.sound` (standard trusted axioms) with **no `sorry`** (audited by `#print
+axioms`). The model is Kerf's discrete denotation (occupancy as a characteristic function on the cell
+lattice — exactly what the code computes).
+
+The Lean proof reduces everything to two abstract properties of coverage (`Coverage.symm`,
+`Coverage.trans`). The concrete Rust rasterizer **discharges `symm`** via `canon_seg`, which Kani proves
+order-independent for all `i64` endpoints — so the chain is complete: Lean proves *properties ⟹ P1–P4*
+(unbounded), Kani proves *the implementation has the properties*. See `proofs/README.md`.
+
+### 5b. Bounded model-checking of the concrete Rust (Kani)
+
+Running `cargo kani -p kerf-core` model-checks these harnesses (in `denote.rs` / `frontend/gcode.rs`,
+`#[cfg(kani)]`); all four verify:
 
 - **`canon_seg_is_order_independent`** — `canon_seg(p, q) == canon_seg(q, p)` for **all** `i64`
   endpoints. This is the *mechanism* of P1: `denote` depends on a segment only through `canon_seg`, so
@@ -99,10 +115,11 @@ These are *bounded* model-checking results over pure kernels, complemented by an
 enumeration test (`reversal_invariant_exhaustively_over_small_programs`) that checks P1 over every small
 program in a coordinate grid. What remains below is the full lift to a semantics-level proof.
 
-## 6. What a full mechanized proof would still need (the research lift)
+## 6. The one remaining layer (the research lift)
 
-To turn P1–P4 into machine-checked theorems *at the denotation level* (Coq / Lean / Isabelle, or Kani
-over a CBMC-friendly rewrite of the rasterizer):
+P1–P4 are now proved over Kerf's discrete denotation (§5a). The single piece still stated as a *caveat*
+rather than a *theorem* is the relationship between that rasterization and an exact real-geometry
+denotation — i.e. closing the "up to resolution `r`" gap with a proof instead of a documented bound:
 
 1. **An exact geometric denotation** (`denote*`) as the union of true swept capsules over ℚ (or a
    decidable exact predicate), independent of rasterization.
