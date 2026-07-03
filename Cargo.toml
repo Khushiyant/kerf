@@ -6,6 +6,7 @@ members = [
     "crates/kerf-cli",
     "crates/kerf-engine",
     "crates/kerf-store",
+    "crates/kerf-queue",
 ]
 
 [workspace.package]
