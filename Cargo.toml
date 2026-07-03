@@ -10,6 +10,7 @@ members = [
     "crates/kerf-api",
     "crates/kerf-worker",
     "crates/kerf-ingest",
+    "crates/kerf-render",
 ]
 
 [workspace.package]
