@@ -1,6 +1,12 @@
 [workspace]
 resolver = "2"
-members = ["crates/kerf-core", "crates/kerf-py", "crates/kerf-cli", "crates/kerf-engine"]
+members = [
+    "crates/kerf-core",
+    "crates/kerf-py",
+    "crates/kerf-cli",
+    "crates/kerf-engine",
+    "crates/kerf-store",
+]
 
 [workspace.package]
 version = "1.0.0"
