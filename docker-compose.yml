@@ -19,7 +19,7 @@ services:
   kerf:
     build: .
     ports:
-      - "8080:8080"
+      - "${KERF_PORT:-8080}:8080"
     environment:
       KERF_ADDR: 0.0.0.0:8080
       KERF_API_KEY: ${KERF_API_KEY:-dev-key}
