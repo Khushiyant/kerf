@@ -6,7 +6,8 @@
 //!    (M82, the default) vs. relative (M83) E is tracked; `G92 E` resets the baseline. The
 //!    extrude/travel/zero-length decision is made on the *rounded micron* displacement, so a
 //!    sub-micron move never produces a degenerate zero-length segment or an absurd width.
-//!  - **Layers are opened only by markers** (`;LAYER:` / `;LAYER_CHANGE` / `; CHANGE_LAYER`) or the
+//!  - **Layers are opened only by markers** (`;LAYER:`, `;LAYER_CHANGE`, `; CHANGE_LAYER`, and the
+//!    `;BEFORE_LAYER_CHANGE` / `;AFTER_LAYER_CHANGE` hooks real PrusaSlicer emits) or the
 //!    first extrusion. The layer Z is the `;Z:` / `; Z_HEIGHT:` value when present, else the Z of the
 //!    triggering extrusion — *never* a Z reached only by a travel hop, so Z-hops never create a
 //!    spurious layer or misfile geometry at the hop height.
@@ -188,7 +189,7 @@ impl Parser {
             .or_else(|| com.strip_prefix("; FEATURE:"))
         {
             self.set_role(v.trim());
-        } else if com == ";LAYER_CHANGE" || com == "; CHANGE_LAYER" || com.starts_with(";LAYER:") {
+        } else if is_layer_marker(com) {
             // A layer boundary flushes the layer AND clears the role, so an untyped extrude on the new
             // layer is a recorded fallback rather than a silent inherit of the previous layer's role.
             self.force_new_layer = true;
@@ -629,6 +630,16 @@ fn classify_role(v: &str) -> Option<RegionKind> {
     }
 }
 
+/// Whether a comment marks a layer boundary. Covers Cura (`;LAYER:`), PrusaSlicer / OrcaSlicer
+/// (`;LAYER_CHANGE`, plus the `;BEFORE_LAYER_CHANGE` / `;AFTER_LAYER_CHANGE` custom-gcode hooks seen in
+/// real 2.x output), and Bambu / Orca BBL (`; CHANGE_LAYER`).
+fn is_layer_marker(com: &str) -> bool {
+    matches!(
+        com,
+        ";LAYER_CHANGE" | "; CHANGE_LAYER" | ";BEFORE_LAYER_CHANGE" | ";AFTER_LAYER_CHANGE"
+    ) || com.starts_with(";LAYER:")
+}
+
 /// Split a physical line into (code, comment). Removes balanced `(...)` spans; the comment is
 /// everything from the first `;` outside parentheses (including the `;`). Unbalanced `(` => the rest
 /// is treated as a comment (dropped from code).
@@ -976,6 +987,19 @@ mod tests {
         assert_eq!(r.diagnostics.arcs_flattened, 1);
         let pts = &r.program.layers[0].toolpaths[0].path.points;
         assert_eq!(pts, &vec![Point::new(10_000, 0), Point::new(0, 10_000)]);
+    }
+
+    #[test]
+    fn prusa_before_after_layer_change_markers_segment_layers() {
+        // PrusaSlicer 2.x custom-gcode convention seen in REAL Benchy output: layers are bounded by
+        // ;BEFORE_LAYER_CHANGE / ;AFTER_LAYER_CHANGE around a `G1 Z` move, with NO ;Z: / ;TYPE:.
+        // (Regression: this real file previously collapsed to a single layer.)
+        let g = "M83\nG21\n;BEFORE_LAYER_CHANGE\nG1 Z0.2\n;AFTER_LAYER_CHANGE\nG1 X5 Y5 E.1\nG1 X15 Y5 E.5\n;BEFORE_LAYER_CHANGE\nG1 Z0.4\n;AFTER_LAYER_CHANGE\nG1 X5 Y5 E.1\nG1 X15 Y5 E.5";
+        let r = parse(g);
+        assert_eq!(
+            r.program.layers.iter().map(|l| l.z_um).collect::<Vec<_>>(),
+            vec![200, 400]
+        );
     }
 
     #[test]

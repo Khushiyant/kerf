@@ -2,6 +2,14 @@
 
 All notable changes to Kerf are documented here. Versions follow [SemVer](https://semver.org).
 
+## [Unreleased]
+
+### Fixed
+- **Real-world layer segmentation.** Recognize PrusaSlicer's `;BEFORE_LAYER_CHANGE` /
+  `;AFTER_LAYER_CHANGE` custom-gcode hooks as layer boundaries. Found by running on a real
+  PrusaSlicer 2.1.1 3DBenchy (136k lines): it previously collapsed all 241 layers into one. Now
+  segments correctly and verifies SOUND in ~0.7 s.
+
 ## [1.0.0]
 
 First production release: a verifiable intermediate representation for the mesh → G-code half of the
