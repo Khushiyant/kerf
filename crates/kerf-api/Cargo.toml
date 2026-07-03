@@ -17,6 +17,16 @@ path = "src/main.rs"
 [features]
 # Use the durable Postgres Store when DATABASE_URL is set (the containerized deployment).
 postgres = ["kerf-store/postgres"]
+# OpenTelemetry request tracing exported over OTLP (viewable in Jaeger; see docker-compose.yml).
+otel = [
+    "dep:tracing",
+    "dep:tracing-subscriber",
+    "dep:tower-http",
+    "dep:opentelemetry",
+    "dep:opentelemetry_sdk",
+    "dep:opentelemetry-otlp",
+    "dep:tracing-opentelemetry",
+]
 
 [dependencies]
 kerf-store = { path = "../kerf-store" }
@@ -27,6 +37,13 @@ axum = "0.8"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "sync"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+tracing = { version = "0.1", optional = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"], optional = true }
+tower-http = { version = "0.6", features = ["trace"], optional = true }
+opentelemetry = { version = "0.21", optional = true }
+opentelemetry_sdk = { version = "0.21", features = ["rt-tokio"], optional = true }
+opentelemetry-otlp = { version = "0.14", optional = true }
+tracing-opentelemetry = { version = "0.22", optional = true }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

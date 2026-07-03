@@ -51,7 +51,7 @@ pub struct AppState {
 /// Build the router. `GET /` serves the dashboard; `/healthz` + `/readyz` are unauthenticated probes;
 /// everything under `/v1` requires a valid `X-API-Key`.
 pub fn build_router(state: AppState) -> Router {
-    Router::new()
+    let app = Router::new()
         .route("/", get(dashboard))
         .route("/healthz", get(|| async { "ok" }))
         .route("/readyz", get(|| async { "ready" }))
@@ -65,8 +65,57 @@ pub fn build_router(state: AppState) -> Router {
         .route("/v1/projects/{project}/baseline", post(put_baseline))
         .route("/v1/projects/{project}/check", post(post_check))
         .route("/v1/alerts", get(get_alerts))
-        .with_state(state)
+        .with_state(state);
+    // Per-request OpenTelemetry spans when built with the `otel` feature.
+    #[cfg(feature = "otel")]
+    let app = app.layer(tower_http::trace::TraceLayer::new_for_http());
+    app
 }
+
+/// Initialize tracing. With the `otel` feature, exports spans over OTLP to
+/// `OTEL_EXPORTER_OTLP_ENDPOINT` (default `http://localhost:4317`, e.g. a Jaeger collector) and also
+/// logs to stderr. Without the feature, a no-op.
+#[cfg(feature = "otel")]
+pub fn init_telemetry() {
+    use opentelemetry::KeyValue;
+    use opentelemetry_otlp::WithExportConfig;
+    use tracing_subscriber::prelude::*;
+    use tracing_subscriber::EnvFilter;
+
+    let endpoint = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT")
+        .unwrap_or_else(|_| "http://localhost:4317".to_string());
+    let tracer = opentelemetry_otlp::new_pipeline()
+        .tracing()
+        .with_exporter(
+            opentelemetry_otlp::new_exporter()
+                .tonic()
+                .with_endpoint(endpoint.clone()),
+        )
+        .with_trace_config(opentelemetry_sdk::trace::config().with_resource(
+            opentelemetry_sdk::Resource::new(vec![KeyValue::new("service.name", "kerf")]),
+        ))
+        .install_batch(opentelemetry_sdk::runtime::Tokio)
+        .expect("build OTLP tracer");
+
+    tracing_subscriber::registry()
+        .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
+        .with(tracing_subscriber::fmt::layer())
+        .with(tracing_opentelemetry::layer().with_tracer(tracer))
+        .init();
+    tracing::info!(endpoint = %endpoint, "OpenTelemetry tracing initialized (OTLP)");
+}
+
+/// Flush any buffered spans on shutdown.
+#[cfg(feature = "otel")]
+pub fn shutdown_telemetry() {
+    opentelemetry::global::shutdown_tracer_provider();
+}
+
+#[cfg(not(feature = "otel"))]
+pub fn init_telemetry() {}
+
+#[cfg(not(feature = "otel"))]
+pub fn shutdown_telemetry() {}
 
 /// Resolve `(tenant, role)` for a request, or reject with 401.
 fn authorize(headers: &HeaderMap, st: &AppState) -> Result<(String, Role), StatusCode> {

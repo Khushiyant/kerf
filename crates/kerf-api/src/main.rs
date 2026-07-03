@@ -7,12 +7,13 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use kerf_api::{build_router, AppState, Metrics, Role};
+use kerf_api::{build_router, init_telemetry, shutdown_telemetry, AppState, Metrics, Role};
 use kerf_queue::{MemQueue, Queue};
 use kerf_store::{MemStore, Store};
 
 #[tokio::main]
 async fn main() {
+    init_telemetry();
     let store: Arc<dyn Store> = select_store();
     let queue: Arc<dyn Queue> = Arc::new(MemQueue::default());
 
@@ -53,6 +54,7 @@ async fn main() {
         .expect("server error");
 
     let _ = worker.await;
+    shutdown_telemetry();
 }
 
 /// Pick the backend: durable Postgres when `DATABASE_URL` is set (and built with `--features postgres`),
