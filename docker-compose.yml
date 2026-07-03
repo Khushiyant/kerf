@@ -1,0 +1,15 @@
+# Run the Kerf platform locally: `docker compose up --build`, then open http://localhost:8080
+# and submit G-code with the X-API-Key below.
+#
+# Phase 1 uses the in-memory backend. When the Postgres Store implementation lands (Phase 2 durability),
+# add a `postgres` service here and point kerf at it via a DATABASE_URL env var.
+services:
+  kerf:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      KERF_ADDR: 0.0.0.0:8080
+      KERF_API_KEY: ${KERF_API_KEY:-dev-key}
+      KERF_TENANT: ${KERF_TENANT:-default}
+    restart: unless-stopped

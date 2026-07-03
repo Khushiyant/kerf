@@ -56,5 +56,5 @@ maturin sdist --out dist
 
 - **Order matters on crates.io:** `kerf-cli` depends on `kerf-core` by version, so `kerf-core` must be
   indexed first. `release.yml` publishes `kerf-core`, then retries `kerf-cli` until the index catches up.
-- **Later:** when `kerf-server` (the enterprise service) lands, add a container-image build/push job to
-  `release.yml` (e.g. GHCR) — the workflow is structured to extend with one more job.
+- **Container image:** `release.yml` builds `kerf-serve` from the `Dockerfile` and pushes it to
+  `ghcr.io/khushiyant/kerf` on a tag. Locally: `docker compose up --build` (see `docker-compose.yml`).

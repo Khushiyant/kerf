@@ -82,7 +82,30 @@ jobs:
         # No token: Trusted Publishing (OIDC) via `id-token: write`. Falls back to a token only if you
         # set one (see RELEASE.md).
 
-  # 3. GitHub Release — attach the built wheels/sdist once crates.io + PyPI succeed.
+  # 3. Container image — build kerf-serve and push to GHCR on the tag.
+  container:
+    name: container image (GHCR)
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/khushiyant/kerf:latest
+            ghcr.io/khushiyant/kerf:${{ github.ref_name }}
+
+  # 4. GitHub Release — attach the built wheels/sdist once crates.io + PyPI succeed.
   github-release:
     name: github release
     needs: [crates-io, pypi]
