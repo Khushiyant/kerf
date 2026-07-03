@@ -2,7 +2,7 @@
 FROM rust:1.90-slim AS build
 WORKDIR /src
 COPY . .
-RUN cargo build --release -p kerf-api --bin kerf-serve
+RUN cargo build --release -p kerf-api --bin kerf-serve --features postgres
 
 # Minimal, non-root runtime (distroless cc for the glibc-linked binary).
 FROM gcr.io/distroless/cc-debian12:nonroot

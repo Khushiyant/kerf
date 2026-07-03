@@ -13,7 +13,7 @@ use kerf_store::{MemStore, Store};
 
 #[tokio::main]
 async fn main() {
-    let store: Arc<dyn Store> = Arc::new(MemStore::new());
+    let store: Arc<dyn Store> = select_store();
     let queue: Arc<dyn Queue> = Arc::new(MemQueue::default());
 
     let key = std::env::var("KERF_API_KEY").unwrap_or_else(|_| "dev-key".to_string());
@@ -45,4 +45,32 @@ async fn main() {
         .expect("server error");
 
     let _ = worker.await;
+}
+
+/// Pick the backend: durable Postgres when `DATABASE_URL` is set (and built with `--features postgres`),
+/// otherwise the in-memory store.
+fn select_store() -> Arc<dyn Store> {
+    match std::env::var("DATABASE_URL") {
+        Ok(url) if !url.is_empty() => {
+            #[cfg(feature = "postgres")]
+            {
+                eprintln!("kerf: using Postgres store");
+                let store = kerf_store::PgStore::connect_retry(&url, 30)
+                    .expect("connect to Postgres (DATABASE_URL)");
+                Arc::new(store)
+            }
+            #[cfg(not(feature = "postgres"))]
+            {
+                eprintln!(
+                    "kerf: DATABASE_URL is set but this build lacks the `postgres` feature; \
+                     using the in-memory store"
+                );
+                Arc::new(MemStore::new())
+            }
+        }
+        _ => {
+            eprintln!("kerf: using in-memory store (set DATABASE_URL for Postgres)");
+            Arc::new(MemStore::new())
+        }
+    }
 }

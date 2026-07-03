@@ -10,9 +10,14 @@ homepage.workspace = true
 authors.workspace = true
 publish = false
 
+[features]
+# Durable Postgres-backed Store (used by the containerized deployment; see docker-compose.yml).
+postgres = ["dep:postgres"]
+
 [dependencies]
 kerf-engine = { path = "../kerf-engine" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
 thiserror = "2"
+postgres = { version = "0.19", features = ["with-serde_json-1"], optional = true }

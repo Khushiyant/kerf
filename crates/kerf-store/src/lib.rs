@@ -18,6 +18,11 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+#[cfg(feature = "postgres")]
+mod pg;
+#[cfg(feature = "postgres")]
+pub use pg::PgStore;
+
 /// Lowercase-hex SHA-256 of a blob's bytes.
 pub type BlobId = String;
 pub type JobId = u64;
