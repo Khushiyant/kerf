@@ -4,6 +4,12 @@ All notable changes to Kerf are documented here. Versions follow [SemVer](https:
 
 ## [Unreleased]
 
+### Tooling
+- **Release pipeline (set up, not triggered).** A tag-driven `release.yml` publishes `kerf-core` +
+  `kerf-cli` to crates.io (in dependency order) and the `kerf` abi3 wheels + sdist to PyPI, and attaches
+  artifacts to a GitHub Release. `kerf-py` is `publish = false` (PyPI-only). See `RELEASE.md` for the
+  checklist and one-time secret / trusted-publisher setup.
+
 ### Performance
 - **~5× faster verification, provably identical output.** The reference rasterizer now (1) prunes each
   segment's per-row column scan to the covered band (cells whose perpendicular distance to the segment's

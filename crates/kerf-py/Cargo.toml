@@ -5,6 +5,9 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
+# Distributed to PyPI as the `kerf` wheel (via maturin), NOT to crates.io — a Python extension module
+# has no meaning as a crate. Keeps `cargo publish --workspace` from trying to upload it.
+publish = false
 
 [lib]
 name = "_kerf"
