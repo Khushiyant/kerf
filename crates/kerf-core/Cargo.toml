@@ -15,6 +15,12 @@ readme = "../../README.md"
 [lib]
 name = "kerf_core"
 
+# `kani` is set by the Kani model checker (`cargo kani`), not by Cargo — declare it so the
+# unexpected_cfgs lint stays green under `-D warnings`. See src/denote.rs / frontend/gcode.rs
+# `kani_proofs` modules and docs/08-semantics.md §5.
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(kani)'] }
+
 [features]
 serde = ["dep:serde", "dep:serde_json"]
 

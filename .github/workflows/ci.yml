@@ -26,6 +26,17 @@ jobs:
           cargo run -q -p kerf-cli -- inspect examples/sample.gcode --json > /dev/null
           cargo run -q -p kerf-cli -- diff examples/sample.gcode examples/sample.gcode
 
+  proofs:
+    name: kani bounded proofs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Model-checks the #[cfg(kani)] harnesses in kerf-core (reversal-invariance mechanism, distance
+      # non-negativity, parser float→micron safety). See docs/08-semantics.md §5.
+      - uses: model-checking/kani-github-action@v1
+        with:
+          args: "-p kerf-core"
+
   wheels:
     name: build wheels (${{ matrix.os }})
     strategy:

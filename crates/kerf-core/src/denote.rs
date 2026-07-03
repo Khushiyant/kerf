@@ -67,6 +67,21 @@ fn dist2_point_seg(p: (f64, f64), a: (f64, f64), b: (f64, f64)) -> f64 {
     ex * ex + ey * ey
 }
 
+/// Canonical (direction-independent) endpoint order for a segment.
+///
+/// This is the *mechanism* of reversal invariance (P1): everything `mark_capsule` computes downstream
+/// depends on a segment only through this ordered pair, so `canon_seg(p, q) == canon_seg(q, p)` implies
+/// the marked cells are identical forward and backward. That equality is machine-checked for **all**
+/// `i64` endpoints by the Kani harness `canon_seg_is_order_independent` (see the `kani_proofs` module),
+/// and pinned at the denotation level by `denote_is_reversal_invariant`.
+fn canon_seg(p: Point, q: Point) -> (Point, Point) {
+    if (p.x, p.y) <= (q.x, q.y) {
+        (p, q)
+    } else {
+        (q, p)
+    }
+}
+
 /// Mark every grid cell the capsule (segment `p`-`q` thickened by `half`) overlaps.
 ///
 /// Endpoints are canonicalized (ordered) before any float math, so the marked set is identical
@@ -77,11 +92,7 @@ fn dist2_point_seg(p: (f64, f64), a: (f64, f64), b: (f64, f64)) -> f64 {
 fn mark_capsule(cells: &mut BTreeSet<(i64, i64)>, p: Point, q: Point, half: f64, r: i64) {
     // Direction-independent endpoint order: the whole pass framework depends on this invariance.
     // (Validated: removing this makes `denote_is_reversal_invariant`'s flip cases fail.)
-    let (a, b) = if (p.x, p.y) <= (q.x, q.y) {
-        (p, q)
-    } else {
-        (q, p)
-    };
+    let (a, b) = canon_seg(p, q);
     let reach = half + (r as f64) * std::f64::consts::FRAC_1_SQRT_2;
     let pad = reach.ceil() as i64;
     // Saturating so an extreme coordinate can never overflow the bbox (the loop range stays small —
@@ -179,6 +190,47 @@ pub fn denote_lo(program: &lo::Program, resolution_um: i64) -> Occupancy {
 /// the moment a pass rewrites the move plan.
 pub fn self_lowering_sound(program: &hi::Program, resolution_um: i64) -> bool {
     denote_hi(program, resolution_um) == denote_lo(&crate::lower::lower(program), resolution_um)
+}
+
+/// Machine-checked (bounded) proofs, discharged by Kani (`cargo kani -p kerf-core`). These are not run
+/// by `cargo test`; they are model-checked exhaustively over their input domains, which property tests
+/// only sample. Each harness targets a *pure kernel* the reference semantics depends on — deliberately
+/// loop- and allocation-free so the model checker terminates. See `docs/08-semantics.md` §5.
+#[cfg(kani)]
+mod kani_proofs {
+    use super::{canon_seg, dist2_point_seg};
+    use crate::ir::Point;
+
+    /// **P1 mechanism, for all `i64` endpoints.** `denote` depends on a segment only through
+    /// `canon_seg`, so proving the canonical order is identical regardless of input order proves
+    /// reversal invariance at its root — exhaustively, not by sampling. Removing the canonicalization
+    /// (the historical bug) makes this fail.
+    #[kani::proof]
+    fn canon_seg_is_order_independent() {
+        let p = Point::new(kani::any(), kani::any());
+        let q = Point::new(kani::any(), kani::any());
+        assert_eq!(canon_seg(p, q), canon_seg(q, p));
+    }
+
+    fn any_finite_bounded(bound: f64) -> f64 {
+        let v: f64 = kani::any();
+        kani::assume(v.is_finite() && v >= -bound && v <= bound);
+        v
+    }
+
+    /// The checker's squared distance is **non-negative and finite** for finite inputs, so a NaN or a
+    /// negative value can never leak into the `dist <= reach²` coverage comparison and produce a
+    /// spurious SOUND/UNSOUND verdict.
+    #[kani::proof]
+    fn dist2_point_seg_is_nonneg_and_finite() {
+        let bound = 1.0e6_f64;
+        let c = (any_finite_bounded(bound), any_finite_bounded(bound));
+        let a = (any_finite_bounded(bound), any_finite_bounded(bound));
+        let b = (any_finite_bounded(bound), any_finite_bounded(bound));
+        let d = dist2_point_seg(c, a, b);
+        assert!(d >= 0.0);
+        assert!(d.is_finite());
+    }
 }
 
 #[cfg(test)]
@@ -292,6 +344,69 @@ mod tests {
         let prog = single_path(vec![Point::new(big, big), Point::new(big + 1000, big)], 400);
         let occ = denote_hi(&prog, 200); // must not overflow/panic
         assert!(!occ.layers[0].cells.is_empty());
+    }
+
+    fn assert_reversal_invariant(pts: &[Point], width_um: i64) {
+        let fwd = single_path(pts.to_vec(), width_um);
+        let mut r = pts.to_vec();
+        r.reverse();
+        let rev = single_path(r, width_um);
+        // resolution 1: the sharpest grid, where float-boundary asymmetry would surface first.
+        assert_eq!(
+            denote_hi(&fwd, 1),
+            denote_hi(&rev, 1),
+            "reversal changed denotation for {pts:?} w={width_um}"
+        );
+    }
+
+    #[test]
+    fn reversal_invariant_exhaustively_over_small_programs() {
+        // Bounded verification *by enumeration* of P1 (reversal invariance): every 2- and 3-point
+        // polyline over a small coordinate grid, at resolution 1, must denote identically forwards
+        // and backwards. Unlike the proptest (which samples), this checks the whole bounded domain
+        // exhaustively — no small program escapes. The knife-edge unit test above is the guard that
+        // *fails* if canonicalization is removed; this is the "holds for all of them" companion.
+        let grid2 = [0i64, 1, 2, 3, 5, 8, 13]; // dense grid for the 2-point sweep
+        let grid3 = [0i64, 1, 3, 7, 13]; // sparser grid keeps the 3-point sweep tractable
+        let widths = [0i64, 2, 5];
+        let mut checked = 0u64;
+        for &w in &widths {
+            for &ax in &grid2 {
+                for &ay in &grid2 {
+                    for &bx in &grid2 {
+                        for &by in &grid2 {
+                            assert_reversal_invariant(&[Point::new(ax, ay), Point::new(bx, by)], w);
+                            checked += 1;
+                        }
+                    }
+                }
+            }
+            for &ax in &grid3 {
+                for &ay in &grid3 {
+                    for &bx in &grid3 {
+                        for &by in &grid3 {
+                            for &cx in &grid3 {
+                                for &cy in &grid3 {
+                                    assert_reversal_invariant(
+                                        &[
+                                            Point::new(ax, ay),
+                                            Point::new(bx, by),
+                                            Point::new(cx, cy),
+                                        ],
+                                        w,
+                                    );
+                                    checked += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            checked > 40_000,
+            "expected a large exhaustive sweep, got {checked}"
+        );
     }
 
     #[test]

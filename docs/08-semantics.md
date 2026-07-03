@@ -79,10 +79,30 @@ proving the oracle rejects a pass that drops material.
 - **Not machine-checked.** The arguments above are proof *sketches* discharged by property/metamorphic
   tests over bounded random inputs, not a mechanized proof. This is the honest status.
 
-## 5. What a mechanized proof would need (the genuine research lift)
+## 5. What is already machine-checked (Kani, bounded)
 
-To turn P1–P4 into machine-checked theorems (Coq / Lean / Isabelle, or Kani for bounded model checking
-of the Rust directly):
+The first proofs are discharged — not sketches. Running `cargo kani -p kerf-core` model-checks these
+harnesses (in `denote.rs` / `frontend/gcode.rs`, `#[cfg(kani)]`); all four verify:
+
+- **`canon_seg_is_order_independent`** — `canon_seg(p, q) == canon_seg(q, p)` for **all** `i64`
+  endpoints. This is the *mechanism* of P1: `denote` depends on a segment only through `canon_seg`, so
+  order-independence of that kernel establishes reversal invariance at its root (the exact property the
+  historical un-canonicalized code violated). Exhaustive over the input domain, not sampled.
+- **`dist2_point_seg_is_nonneg_and_finite`** — the checker's squared distance is `>= 0` and finite for
+  finite inputs, so a NaN/negative can never leak into the `dist <= reach²` comparison and flip a verdict.
+- **`mm_to_um_is_total_and_in_range`** / **`um_round_is_total_and_in_range`** — the parser's
+  float→micron conversions never panic and, when they yield a coordinate, it is inside the guarded
+  range (the internal `as i64` cast is exact, never a silent saturation) — checked for every `f64`,
+  including NaN / ±inf / subnormals.
+
+These are *bounded* model-checking results over pure kernels, complemented by an exhaustive
+enumeration test (`reversal_invariant_exhaustively_over_small_programs`) that checks P1 over every small
+program in a coordinate grid. What remains below is the full lift to a semantics-level proof.
+
+## 6. What a full mechanized proof would still need (the research lift)
+
+To turn P1–P4 into machine-checked theorems *at the denotation level* (Coq / Lean / Isabelle, or Kani
+over a CBMC-friendly rewrite of the rasterizer):
 
 1. **An exact geometric denotation** (`denote*`) as the union of true swept capsules over ℚ (or a
    decidable exact predicate), independent of rasterization.

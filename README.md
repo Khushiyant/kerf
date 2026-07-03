@@ -150,18 +150,20 @@ assert r["has_geometry"] and r["pass_preserves_denotation"] and r["translation_i
 
 ## Status
 
-Research + scoping + five adversarial reviews complete. **Green and implemented** (48 core + 4 CLI
-tests + property/fuzz pass, clippy clean, CI covers the workspace + CLI + wheel):
+Research + scoping + five adversarial reviews complete. **Green and implemented** (55 core + 5 CLI
+tests + property/fuzz pass + 4 machine-checked Kani proofs, clippy clean, CI covers the workspace + CLI
++ wheel):
 
 - Two-level IR (`hi` regions / `lo` move plan), `hi→lo` lowering, `denote` reference semantics.
 - The self-lowering-soundness **oracle** — reversal-invariant, conservative coverage (hardened after
   the soundness review found real bugs; see `docs/07`).
 - The first real optimization **pass** (`TravelOrder`), checked by the oracle (cuts demo travel ~62%).
 - A **G-code parser frontend** that reads real Cura / PrusaSlicer / OrcaSlicer / BambuStudio /
-  Simplify3D output into the IR, including **arc (G2/G3) flattening** (I/J and R forms) — never panics
-  on untrusted input (property-fuzzed), with a trust boundary and diagnostics. **Validated on real
-  files** from all of the above (incl. a 136k-line PrusaSlicer Benchy and ArcWelder arcs); two
-  real-world layer/role vocabulary gaps found and fixed this way (see `CHANGELOG.md`).
+  Simplify3D / ideaMaker / KISSlicer / Slic3r output into the IR, including **arc (G2/G3) flattening**
+  (I/J and R forms) — never panics on untrusted input (property-fuzzed), with a trust boundary and
+  diagnostics. **Validated on real files** from all of the above (incl. a 136k-line PrusaSlicer Benchy
+  and ArcWelder arcs); several real-world layer/role vocabulary gaps found and fixed this way (see
+  `CHANGELOG.md`).
 - **`verify_gcode`** — the delta beyond GlitchFinder: on *real parsed slicer geometry*, check that a
   Kerf pass preserves the deposited material **and** a second metamorphic relation (translation).
 - **`kerf diff`** — compare two files by the material they deposit ("do these two slicers make the
@@ -177,11 +179,14 @@ tests + property/fuzz pass, clippy clean, CI covers the workspace + CLI + wheel)
 - **Parser recovers deposited geometry**, not exact process state: widths without a `;WIDTH:` comment
   are estimated, feature roles are an untrusted re-inference (unknown → `Perimeter`, recorded), and
   pre-extrusion travel is elided. See `crates/kerf-core/src/frontend/gcode.rs`.
-- **Oracle, not proof.** Property/metamorphic checking, not a machine-checked proof (see `docs/06` trust model).
+- **Oracle, plus first bounded proofs.** The end-to-end guarantee is property/metamorphic checking, not
+  a full machine-checked proof. But the load-bearing kernels are now **verified by Kani** (bounded model
+  checking): reversal invariance's mechanism for all `i64` endpoints, and the parser's coordinate math
+  is panic-/overflow-free for all `f64`. A semantics-level proof over exact geometry remains future work
+  (see `docs/08-semantics.md`).
 
 The design record and remaining future work are in [`docs/06-architecture.md`](docs/06-architecture.md)
 and [`docs/07-design-review.md`](docs/07-design-review.md). Genuinely-remaining work toward a
-production tool: a faithful (flow/E/retraction, arc-emitting) G-code backend; scale/perf for
-100k+-move prints; a 3-OS + wheel publish matrix; and — the big research target — extending the
-verified lowering toward a mechanized end-to-end proof. (The parser's arc *input* support is done;
-only the backend's arc *output* remains.)
+production tool: scale/perf for 100k+-move prints; a 3-OS + wheel publish matrix; and — the big
+research target — lifting the now-discharged bounded (Kani) proofs of the kernels toward a
+semantics-level, mechanized end-to-end proof over exact geometry (`docs/08-semantics.md` §6).

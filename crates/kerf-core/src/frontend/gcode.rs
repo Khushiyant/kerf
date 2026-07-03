@@ -233,9 +233,16 @@ impl Parser {
                     }
                 }
             }
-        } else if let Some(mapped) = s3d_role(com) {
-            // Simplify3D bare role comments (no ;TYPE: prefix), e.g. "; outer perimeter", "; infill".
-            self.cur_role_raw = Some(com.trim_start_matches("; ").to_string());
+        } else if let Some(mapped) = bare_role(com) {
+            // Prefix-less feature comments: Simplify3D ("; outer perimeter"), verbose Slic3r
+            // ("; perimeter"), KISSlicer ("; 'Perimeter Path', ..."). For the KISSlicer quoted form,
+            // record just the role name — not the trailing feed/head rates, which would otherwise make
+            // every wipe move a distinct "unknown role" in diagnostics.
+            let raw = com
+                .strip_prefix("; '")
+                .and_then(|r| r.split('\'').next())
+                .unwrap_or_else(|| com.trim_start_matches("; "));
+            self.cur_role_raw = Some(raw.to_string());
             match mapped {
                 Some(rk) => {
                     self.cur_role = Some(rk);
@@ -629,6 +636,9 @@ fn classify_role(v: &str) -> Option<RegionKind> {
         "SKIN" => Some(Skin),
         "FILL" => Some(Infill),
         "SUPPORT" | "SUPPORT-INTERFACE" => Some(Support),
+        // ideaMaker (Raise3D): also `;TYPE:` values, hyphen-uppercase like Cura
+        "SOLID-FILL" | "BRIDGE" => Some(Skin),
+        "GAP-FILL" => Some(Infill),
         // PrusaSlicer
         "Perimeter" | "External perimeter" | "Overhang perimeter" => Some(Perimeter),
         "Internal infill" | "Gap fill" => Some(Infill),
@@ -654,12 +664,14 @@ fn classify_role(v: &str) -> Option<RegionKind> {
 
 /// Whether a comment marks a layer boundary. Covers Cura (`;LAYER:`), PrusaSlicer / OrcaSlicer
 /// (`;LAYER_CHANGE`, plus the `;BEFORE_LAYER_CHANGE` / `;AFTER_LAYER_CHANGE` custom-gcode hooks seen in
-/// real 2.x output), and Bambu / Orca BBL (`; CHANGE_LAYER`).
+/// real 2.x output), Bambu / Orca BBL (`; CHANGE_LAYER`), Simplify3D (`; layer N, Z = ...`), and
+/// KISSlicer (`; BEGIN_LAYER_OBJECT z=...`).
 fn is_layer_marker(com: &str) -> bool {
     matches!(
         com,
         ";LAYER_CHANGE" | "; CHANGE_LAYER" | ";BEFORE_LAYER_CHANGE" | ";AFTER_LAYER_CHANGE"
     ) || com.starts_with(";LAYER:")
+        || com.starts_with("; BEGIN_LAYER_OBJECT")
         || is_s3d_layer(com)
 }
 
@@ -670,29 +682,65 @@ fn is_s3d_layer(com: &str) -> bool {
         .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()))
 }
 
-/// Extract an inline `Z = <mm>` value from a comment (Simplify3D layer markers). Returns the leading
-/// numeric value after the first `=` that follows a `Z`.
+/// Extract an inline layer height from a comment: the first `z`/`Z` token immediately followed (after
+/// optional spaces) by `=` and a number. Handles Simplify3D `Z = 0.18` and KISSlicer `z=0.200`
+/// (case-insensitive; the later `z_thickness=` on the same KISSlicer line is ignored as we return the
+/// first match).
 fn inline_z_mm(com: &str) -> Option<f64> {
-    let z = com.find('Z')?;
-    let eq = com[z..].find('=')?;
-    let rest = com[z + eq + 1..].trim_start();
-    let num: String = rest
-        .chars()
-        .take_while(|c| c.is_ascii_digit() || matches!(c, '.' | '-' | '+'))
-        .collect();
-    num.parse::<f64>().ok().filter(|v| v.is_finite())
+    for (i, c) in com.char_indices() {
+        if c != 'z' && c != 'Z' {
+            continue;
+        }
+        let rest = com[i + c.len_utf8()..].trim_start();
+        let Some(after_eq) = rest.strip_prefix('=') else {
+            continue;
+        };
+        let num: String = after_eq
+            .trim_start()
+            .chars()
+            .take_while(|c| c.is_ascii_digit() || matches!(c, '.' | '-' | '+'))
+            .collect();
+        if let Some(v) = num.parse::<f64>().ok().filter(|v| v.is_finite()) {
+            return Some(v);
+        }
+    }
+    None
 }
 
-/// Simplify3D bare role comments (no `;TYPE:` prefix). `Some(Some(k))` = a mapped role, `Some(None)` =
-/// a recognized-but-non-structural role (skirt/brim), `None` = not an S3D role comment (ignore it).
-fn s3d_role(com: &str) -> Option<Option<RegionKind>> {
+/// Feature-role comments that carry no `;TYPE:` / `; FEATURE:` prefix. Covers the slicers that annotate
+/// features with a plain comment: Simplify3D (`; outer perimeter`), verbose Slic3r / SuperSlicer
+/// (lowercase `; perimeter`, emitted only when `gcode_comments` is on), and KISSlicer (quoted
+/// `; 'Perimeter Path', 0.8 [feed mm/s], ...`). `Some(Some(k))` = a mapped structural role,
+/// `Some(None)` = a recognized-but-unmapped/non-structural role (skirt/brim/wipe → fallback + recorded),
+/// `None` = not a role comment (ignore it).
+fn bare_role(com: &str) -> Option<Option<RegionKind>> {
     use RegionKind::*;
+    // KISSlicer: `; '<name>', <feed> [feed mm/s], <head> [head mm/s]` — strip the quoted name.
+    if let Some(rest) = com.strip_prefix("; '") {
+        let name = rest.split('\'').next().unwrap_or("");
+        let key = name.strip_suffix(" Path").unwrap_or(name); // PREMIUM adds " Path"; FREE omits it
+        return Some(match key {
+            "Perimeter" | "Loop" | "Crown" => Some(Perimeter),
+            "Solid" => Some(Skin),
+            "Sparse Infill" | "Stacked Sparse Infill" | "Infill" => Some(Infill),
+            "Support" | "Support Interface" => Some(Support),
+            // Prime Pillar, Destring/Wipe/Jump, Wipe (and De-string), Skirt, ... → non-structural
+            _ => None,
+        });
+    }
+    // Exact-match table for Simplify3D + verbose Slic3r/SuperSlicer (all lowercase).
     match com {
-        "; outer perimeter" | "; inner perimeter" => Some(Some(Perimeter)),
-        "; infill" => Some(Some(Infill)),
-        "; solid layer" => Some(Some(Skin)),
-        "; bridge" => Some(Some(Skin)),
-        "; support" | "; dense support" => Some(Some(Support)),
+        "; outer perimeter"
+        | "; inner perimeter"
+        | "; perimeter"
+        | "; external perimeter"
+        | "; overhang perimeter" => Some(Some(Perimeter)),
+        "; infill" | "; sparse infill" | "; internal infill" => Some(Some(Infill)),
+        "; solid layer" | "; solid infill" | "; top infill" | "; top solid infill" | "; bridge"
+        | "; bridge infill" => Some(Some(Skin)),
+        "; support" | "; dense support" | "; support material" | "; support material interface" => {
+            Some(Some(Support))
+        }
         "; skirt" | "; brim" | "; prime pillar" => Some(None),
         _ => None,
     }
@@ -766,6 +814,36 @@ fn um_round(x: f64, y: f64) -> Option<Point> {
         Some(Point::new(x.round() as i64, y.round() as i64))
     } else {
         None
+    }
+}
+
+/// Machine-checked (bounded) proofs that the parser's float→coordinate conversions are total (never
+/// panic) and range-safe. Discharged by Kani (`cargo kani -p kerf-core`), not `cargo test`; checked for
+/// EVERY `f64` input including NaN / ±inf / subnormals. See `docs/08-semantics.md` §5.
+#[cfg(kani)]
+mod kani_proofs {
+    use super::{mm_to_um, um_round};
+
+    const LIMIT: i64 = 9_000_000_000_000_000_000; // < i64::MAX; the guard both fns enforce
+
+    /// `mm_to_um` never panics and, when it yields a coordinate, that coordinate is strictly inside the
+    /// guarded range — so the internal `as i64` cast is exact (never a silent saturation).
+    #[kani::proof]
+    fn mm_to_um_is_total_and_in_range() {
+        let mm: f64 = kani::any();
+        if let Some(v) = mm_to_um(mm) {
+            assert!(v > -LIMIT && v < LIMIT);
+        }
+    }
+
+    /// Same guarantee for the arc-flattening point rounder.
+    #[kani::proof]
+    fn um_round_is_total_and_in_range() {
+        let x: f64 = kani::any();
+        let y: f64 = kani::any();
+        if let Some(p) = um_round(x, y) {
+            assert!(p.x > -LIMIT && p.x < LIMIT && p.y > -LIMIT && p.y < LIMIT);
+        }
     }
 }
 
@@ -1077,6 +1155,69 @@ mod tests {
             r.diagnostics.unknown_roles
         );
         assert_eq!(r.diagnostics.fallback_role_moves, 0);
+    }
+
+    #[test]
+    fn ideamaker_solid_fill_gap_fill_and_bridge_roles_are_recognized() {
+        // ideaMaker (Raise3D) emits `;TYPE:` values SOLID-FILL / GAP-FILL / BRIDGE that previously fell
+        // back to Perimeter — the majority of deposited material on a real print. (Found by real-world
+        // testing on ideaMaker 5.3.x output.)
+        let g = ";LAYER:0\n;Z:0.3\n;TYPE:SOLID-FILL\nG1 X10 Y10 E1\n;TYPE:GAP-FILL\nG1 X20 Y10 E2\n;TYPE:BRIDGE\nG1 X20 Y20 E3";
+        let r = parse(g);
+        let tps = &r.program.layers[0].toolpaths;
+        assert!(tps
+            .iter()
+            .any(|t| t.kind == SegmentKind::Extrude(RegionKind::Skin))); // SOLID-FILL, BRIDGE
+        assert!(tps
+            .iter()
+            .any(|t| t.kind == SegmentKind::Extrude(RegionKind::Infill))); // GAP-FILL
+        assert_eq!(r.diagnostics.fallback_role_moves, 0);
+        assert!(r.diagnostics.unknown_roles.is_empty());
+    }
+
+    #[test]
+    fn kisslicer_layers_and_quoted_roles() {
+        // KISSlicer: `; BEGIN_LAYER_OBJECT z=<mm>` boundaries + quoted `; '<Role> Path', ...` comments.
+        // Previously the whole print collapsed to one layer with every extrude an unknown-role fallback.
+        // (Found by real-world testing on KISSlicer output.)
+        let g = "; KISSlicer\n; BEGIN_LAYER_OBJECT z=0.20 z_thickness=0.20\n; 'Perimeter Path', 0.8 [feed mm/s], 25.0 [head mm/s]\nG1 X10 Y10 E1\nG1 X20 Y10 E2\n; 'Sparse Infill Path', 0.8 [feed mm/s]\nG1 X20 Y20 E3\n; END_LAYER_OBJECT\n; BEGIN_LAYER_OBJECT z=0.40 z_thickness=0.20\n; 'Solid Path'\nG1 X10 Y10 E4";
+        let r = parse(g);
+        assert_eq!(
+            r.program.layers.iter().map(|l| l.z_um).collect::<Vec<_>>(),
+            vec![200, 400]
+        );
+        let l0 = &r.program.layers[0].toolpaths;
+        assert!(l0
+            .iter()
+            .any(|t| t.kind == SegmentKind::Extrude(RegionKind::Perimeter)));
+        assert!(l0
+            .iter()
+            .any(|t| t.kind == SegmentKind::Extrude(RegionKind::Infill)));
+        assert!(r.program.layers[1]
+            .toolpaths
+            .iter()
+            .any(|t| t.kind == SegmentKind::Extrude(RegionKind::Skin))); // Solid
+        assert_eq!(r.diagnostics.fallback_role_moves, 0);
+    }
+
+    #[test]
+    fn verbose_slic3r_lowercase_roles_are_recognized() {
+        // Slic3r / SuperSlicer with `gcode_comments` on: lowercase bare role comments (no `;TYPE:`).
+        // Previously `; perimeter` / `; solid infill` / `; support material` fell back to unknown.
+        let g = ";LAYER_CHANGE\n;Z:0.2\n; perimeter\nG1 X10 Y10 E1\n; solid infill\nG1 X20 Y10 E2\n; support material\nG1 X20 Y20 E3";
+        let r = parse(g);
+        let tps = &r.program.layers[0].toolpaths;
+        assert!(tps
+            .iter()
+            .any(|t| t.kind == SegmentKind::Extrude(RegionKind::Perimeter)));
+        assert!(tps
+            .iter()
+            .any(|t| t.kind == SegmentKind::Extrude(RegionKind::Skin))); // solid infill
+        assert!(tps
+            .iter()
+            .any(|t| t.kind == SegmentKind::Extrude(RegionKind::Support)));
+        assert_eq!(r.diagnostics.fallback_role_moves, 0);
+        assert!(r.diagnostics.unknown_roles.is_empty());
     }
 
     #[test]

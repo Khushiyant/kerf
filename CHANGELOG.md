@@ -4,6 +4,16 @@ All notable changes to Kerf are documented here. Versions follow [SemVer](https:
 
 ## [Unreleased]
 
+### Added (verification)
+- **Machine-checked (bounded) proofs via Kani.** Four `#[cfg(kani)]` harnesses, all verified by
+  `cargo kani -p kerf-core`: `canon_seg_is_order_independent` (the mechanism of reversal invariance,
+  for *all* `i64` endpoints), `dist2_point_seg_is_nonneg_and_finite` (no NaN/negative leaks into the
+  coverage comparison), and `mm_to_um` / `um_round` totality-and-range (the parser's float→micron
+  conversions never panic and never silently saturate). See `docs/08-semantics.md` §5.
+- **Exhaustive bounded verification test.** `reversal_invariant_exhaustively_over_small_programs`
+  enumerates *every* 2- and 3-point program over a coordinate grid (~40k programs) and checks P1 holds
+  — a complete check of the bounded domain, where the proptest only samples.
+
 ### Fixed (found by testing on real slicer output)
 - **PrusaSlicer layer segmentation.** Recognize `;BEFORE_LAYER_CHANGE` / `;AFTER_LAYER_CHANGE`
   custom-gcode hooks as layer boundaries. A real PrusaSlicer 2.1.1 3DBenchy (136k lines) previously
@@ -13,12 +23,33 @@ All notable changes to Kerf are documented here. Versions follow [SemVer](https:
   `; support`, `; bridge`, `; skirt`) that have no `;TYPE:` prefix. A real Simplify3D 3.1.0 file (106
   layers) previously collapsed to 1 layer with every move an unknown-role fallback; now segments to
   106 layers with roles recovered.
+- **ideaMaker (Raise3D) roles.** Map the `;TYPE:` values `SOLID-FILL` / `BRIDGE` → Skin and `GAP-FILL`
+  → Infill. On a real ideaMaker 5.3 print these were the *majority* of deposited material and all fell
+  back to Perimeter; the same file now recovers 23 layers with only its 64 skirt moves as fallback.
+- **KISSlicer support (new).** Recognize `; BEGIN_LAYER_OBJECT z=<mm>` layer markers (inline lowercase
+  `z=`) and the quoted role form `; '<Role> Path', <feed> [feed mm/s], ...` (PREMIUM) / `; '<Role>'`
+  (FREE). A real FREE cube previously collapsed to 1 layer with every extrude an unknown-role fallback;
+  now recovers 40 layers with only wipe moves (correctly) non-structural.
+- **Verbose Slic3r / SuperSlicer roles.** Recognize the lowercase bare comments (`; perimeter`,
+  `; external perimeter`, `; solid infill`, `; support material`, …) emitted with `gcode_comments` on.
 - **OrcaSlicer/Bambu roles.** Map `Floating vertical shell` / `Floating interface shell` to Perimeter.
+- **Cleaner KISSlicer diagnostics.** Record only the quoted role *name* (not the trailing feed/head
+  rates), so a wipe feature no longer appears as many distinct "unknown roles".
 
 ### Validated
 - Ran on real output from Cura (3.6, 5.3), PrusaSlicer (2.1, 2.7), BambuStudio/OrcaSlicer (BBL),
-  Simplify3D (3.1), and ArcWelder-processed arcs — no panics, no unsound verdicts; geometry and (post-fix)
-  layer/role recovery correct across all.
+  Simplify3D (3.1), ideaMaker (5.3), KISSlicer (FREE 1.1 / PREMIUM 1.6), Slic3r (1.3), and
+  ArcWelder-processed arcs — no panics, no unsound verdicts; geometry and (post-fix) layer/role
+  recovery correct across all.
+
+### Known limitations (documented, not hidden)
+- **Comment-less G-code isn't segmentable.** Slic3r with `gcode_comments=0` (the default) emits no
+  layer/role comments at all — only bare `G1 Z` moves — so the print recovers as a single layer.
+  Inferring layers from Z-increasing travel would misfire on Z-hops; enable `gcode_comments` instead.
+- **Older marker-less KISSlicer.** A pre-`BEGIN_LAYER_OBJECT` KISSlicer dialect (seen in 2019 output)
+  segments only via `; Prepare for …` feature comments with no reliable per-layer *start*; not supported.
+- **G91 relative-coordinate moves** are skipped (counted in `skipped_g91_moves`); arcs in relative mode
+  are not flattened. Real FFF prints use absolute XY.
 
 ## [1.0.0]
 
