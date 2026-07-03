@@ -4,6 +4,7 @@
 //! and every read is tenant-scoped so one tenant can never see another's jobs or results.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use axum::{
@@ -20,13 +21,31 @@ use kerf_store::{Alert, Job, JobSpec, Store, StoredResult};
 
 const DEFAULT_RESOLUTION_UM: i64 = 200;
 
+/// Access level of an API key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Role {
+    /// Read-only: may read jobs / results / alerts, may not submit work.
+    Reader,
+    /// May submit work (verify / diff / check) and register baselines — plus everything a Reader can.
+    Writer,
+}
+
+/// Service counters exposed at `/metrics` (Prometheus text).
+#[derive(Default)]
+pub struct Metrics {
+    pub verify: AtomicU64,
+    pub diff: AtomicU64,
+    pub baseline: AtomicU64,
+}
+
 /// Shared service state.
 #[derive(Clone)]
 pub struct AppState {
     pub store: Arc<dyn Store>,
     pub queue: Arc<dyn Queue>,
-    /// API key → tenant.
-    pub keys: Arc<HashMap<String, String>>,
+    /// API key → (tenant, role).
+    pub keys: Arc<HashMap<String, (String, Role)>>,
+    pub metrics: Arc<Metrics>,
 }
 
 /// Build the router. `GET /` serves the dashboard; `/healthz` + `/readyz` are unauthenticated probes;
@@ -36,6 +55,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/", get(dashboard))
         .route("/healthz", get(|| async { "ok" }))
         .route("/readyz", get(|| async { "ready" }))
+        .route("/metrics", get(metrics))
         .route("/v1/verify", post(post_verify))
         .route("/v1/diff", post(post_diff))
         .route("/v1/jobs", get(list_jobs))
@@ -48,13 +68,39 @@ pub fn build_router(state: AppState) -> Router {
         .with_state(state)
 }
 
-/// Resolve the tenant for a request, or reject with 401.
-fn authorize(headers: &HeaderMap, st: &AppState) -> Result<String, StatusCode> {
+/// Resolve `(tenant, role)` for a request, or reject with 401.
+fn authorize(headers: &HeaderMap, st: &AppState) -> Result<(String, Role), StatusCode> {
     let key = headers
         .get("x-api-key")
         .and_then(|v| v.to_str().ok())
         .ok_or(StatusCode::UNAUTHORIZED)?;
     st.keys.get(key).cloned().ok_or(StatusCode::UNAUTHORIZED)
+}
+
+/// Require a Writer role, else 403.
+fn require_write(role: Role) -> Result<(), StatusCode> {
+    if role == Role::Writer {
+        Ok(())
+    } else {
+        Err(StatusCode::FORBIDDEN)
+    }
+}
+
+async fn metrics(State(st): State<AppState>) -> impl IntoResponse {
+    let m = &st.metrics;
+    (
+        [(header::CONTENT_TYPE, "text/plain; version=0.0.4")],
+        format!(
+            "# HELP kerf_jobs_submitted_total Jobs submitted, by kind.\n\
+             # TYPE kerf_jobs_submitted_total counter\n\
+             kerf_jobs_submitted_total{{kind=\"verify\"}} {}\n\
+             kerf_jobs_submitted_total{{kind=\"diff\"}} {}\n\
+             kerf_jobs_submitted_total{{kind=\"baseline\"}} {}\n",
+            m.verify.load(Ordering::Relaxed),
+            m.diff.load(Ordering::Relaxed),
+            m.baseline.load(Ordering::Relaxed),
+        ),
+    )
 }
 
 #[derive(Deserialize)]
@@ -91,8 +137,10 @@ async fn post_verify(
     headers: HeaderMap,
     Json(req): Json<VerifyReq>,
 ) -> Result<(StatusCode, Json<JobAccepted>), StatusCode> {
-    let tenant = authorize(&headers, &st)?;
+    let (tenant, role) = authorize(&headers, &st)?;
+    require_write(role)?;
     let res = resolution(req.resolution_um)?;
+    st.metrics.verify.fetch_add(1, Ordering::Relaxed);
     let blob = st.store.put_blob(req.gcode.as_bytes());
     let job = st
         .store
@@ -106,8 +154,10 @@ async fn post_diff(
     headers: HeaderMap,
     Json(req): Json<DiffReq>,
 ) -> Result<(StatusCode, Json<JobAccepted>), StatusCode> {
-    let tenant = authorize(&headers, &st)?;
+    let (tenant, role) = authorize(&headers, &st)?;
+    require_write(role)?;
     let res = resolution(req.resolution_um)?;
+    st.metrics.diff.fetch_add(1, Ordering::Relaxed);
     let a = st.store.put_blob(req.a.as_bytes());
     let b = st.store.put_blob(req.b.as_bytes());
     let job = st.store.create_job(&tenant, JobSpec::Diff { a, b }, res);
@@ -120,7 +170,7 @@ async fn get_job(
     headers: HeaderMap,
     Path(id): Path<u64>,
 ) -> Result<Json<Job>, StatusCode> {
-    let tenant = authorize(&headers, &st)?;
+    let (tenant, _) = authorize(&headers, &st)?;
     let job = st
         .store
         .get_job(id)
@@ -134,7 +184,7 @@ async fn get_result(
     headers: HeaderMap,
     Path(id): Path<u64>,
 ) -> Result<Json<StoredResult>, StatusCode> {
-    let tenant = authorize(&headers, &st)?;
+    let (tenant, _) = authorize(&headers, &st)?;
     let result = st
         .store
         .get_result(id)
@@ -147,7 +197,7 @@ async fn list_jobs(
     State(st): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<Vec<Job>>, StatusCode> {
-    let tenant = authorize(&headers, &st)?;
+    let (tenant, _) = authorize(&headers, &st)?;
     Ok(Json(st.store.list_jobs(&tenant)))
 }
 
@@ -158,7 +208,8 @@ async fn put_baseline(
     Path(project): Path<String>,
     Json(req): Json<VerifyReq>,
 ) -> Result<StatusCode, StatusCode> {
-    let tenant = authorize(&headers, &st)?;
+    let (tenant, role) = authorize(&headers, &st)?;
+    require_write(role)?;
     let res = resolution(req.resolution_um)?;
     let blob = st.store.put_blob(req.gcode.as_bytes());
     st.store.set_baseline(&tenant, &project, blob, res);
@@ -172,8 +223,10 @@ async fn post_check(
     Path(project): Path<String>,
     Json(req): Json<VerifyReq>,
 ) -> Result<(StatusCode, Json<JobAccepted>), StatusCode> {
-    let tenant = authorize(&headers, &st)?;
+    let (tenant, role) = authorize(&headers, &st)?;
+    require_write(role)?;
     let res = resolution(req.resolution_um)?;
+    st.metrics.baseline.fetch_add(1, Ordering::Relaxed);
     let blob = st.store.put_blob(req.gcode.as_bytes());
     let job = st.store.create_job(
         &tenant,
@@ -191,7 +244,7 @@ async fn get_alerts(
     State(st): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<Vec<Alert>>, StatusCode> {
-    let tenant = authorize(&headers, &st)?;
+    let (tenant, _) = authorize(&headers, &st)?;
     Ok(Json(st.store.list_alerts(&tenant)))
 }
 
@@ -208,7 +261,7 @@ async fn get_diff_png(
     Path(id): Path<u64>,
     Query(q): Query<LayerQuery>,
 ) -> Result<impl IntoResponse, StatusCode> {
-    let tenant = authorize(&headers, &st)?;
+    let (tenant, _) = authorize(&headers, &st)?;
     let result = st
         .store
         .get_result(id)
@@ -296,12 +349,16 @@ mod tests {
     fn state() -> (AppState, Arc<dyn Store>, Arc<dyn Queue>) {
         let store: Arc<dyn Store> = Arc::new(MemStore::new());
         let queue: Arc<dyn Queue> = Arc::new(MemQueue::default());
-        let keys = Arc::new(HashMap::from([("dev".to_string(), "acme".to_string())]));
+        let keys = Arc::new(HashMap::from([
+            ("dev".to_string(), ("acme".to_string(), Role::Writer)),
+            ("dev-ro".to_string(), ("acme".to_string(), Role::Reader)),
+        ]));
         (
             AppState {
                 store: store.clone(),
                 queue: queue.clone(),
                 keys,
+                metrics: Arc::new(Metrics::default()),
             },
             store,
             queue,
@@ -525,15 +582,69 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn readers_cannot_submit_but_can_read() {
+        let (st, store, queue) = state();
+        let app = build_router(st);
+        // A reader key may not submit.
+        let (code, _) = send(app.clone(), verify_req(Some("dev-ro"))).await;
+        assert_eq!(code, StatusCode::FORBIDDEN);
+        // A writer key submits.
+        let (_, body) = send(app.clone(), verify_req(Some("dev"))).await;
+        let job_id = serde_json::from_str::<serde_json::Value>(&body).unwrap()["job_id"]
+            .as_u64()
+            .unwrap();
+        kerf_worker::process_one(store.as_ref(), queue.as_ref());
+        // The reader may read it.
+        let (code, _) = send(
+            app,
+            Request::builder()
+                .uri(format!("/v1/jobs/{job_id}"))
+                .header("x-api-key", "dev-ro")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(code, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn metrics_counts_submissions() {
+        let (st, _, _) = state();
+        let app = build_router(st);
+        send(app.clone(), verify_req(Some("dev"))).await;
+        let (code, body) = send(
+            app,
+            Request::builder()
+                .uri("/metrics")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(code, StatusCode::OK);
+        assert!(
+            body.contains("kerf_jobs_submitted_total{kind=\"verify\"} 1"),
+            "metrics body: {body}"
+        );
+    }
+
+    #[tokio::test]
     async fn tenants_cannot_read_across_the_boundary() {
         // acme submits; a key for another tenant must not see the job.
         let store: Arc<dyn Store> = Arc::new(MemStore::new());
         let queue: Arc<dyn Queue> = Arc::new(MemQueue::default());
         let keys = Arc::new(HashMap::from([
-            ("acme-key".to_string(), "acme".to_string()),
-            ("globex-key".to_string(), "globex".to_string()),
+            ("acme-key".to_string(), ("acme".to_string(), Role::Writer)),
+            (
+                "globex-key".to_string(),
+                ("globex".to_string(), Role::Writer),
+            ),
         ]));
-        let st = AppState { store, queue, keys };
+        let st = AppState {
+            store,
+            queue,
+            keys,
+            metrics: Arc::new(Metrics::default()),
+        };
         let app = build_router(st);
 
         let (_, body) = send(app.clone(), verify_req(Some("acme-key"))).await;

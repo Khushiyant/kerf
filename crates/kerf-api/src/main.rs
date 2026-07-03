@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use kerf_api::{build_router, AppState};
+use kerf_api::{build_router, AppState, Metrics, Role};
 use kerf_queue::{MemQueue, Queue};
 use kerf_store::{MemStore, Store};
 
@@ -18,12 +18,20 @@ async fn main() {
 
     let key = std::env::var("KERF_API_KEY").unwrap_or_else(|_| "dev-key".to_string());
     let tenant = std::env::var("KERF_TENANT").unwrap_or_else(|_| "default".to_string());
-    let keys = Arc::new(HashMap::from([(key.clone(), tenant)]));
+    let mut key_map = HashMap::from([(key.clone(), (tenant.clone(), Role::Writer))]);
+    // Optional read-only key (RBAC): KERF_READER_KEY may read but not submit.
+    if let Ok(ro) = std::env::var("KERF_READER_KEY") {
+        if !ro.is_empty() {
+            key_map.insert(ro, (tenant.clone(), Role::Reader));
+        }
+    }
+    let keys = Arc::new(key_map);
 
     let state = AppState {
         store: store.clone(),
         queue: queue.clone(),
         keys,
+        metrics: Arc::new(Metrics::default()),
     };
 
     // Background worker loop, stopped on shutdown.
