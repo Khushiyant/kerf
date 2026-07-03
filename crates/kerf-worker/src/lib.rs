@@ -54,11 +54,47 @@ pub fn process_one(store: &dyn Store, queue: &dyn Queue) -> Outcome {
                 return Outcome::Failed { job: job_id };
             }
         },
+        JobSpec::Baseline { project, input } => {
+            let Some(baseline) = store.get_baseline(&job.tenant, project) else {
+                queue.nack(job_id);
+                return Outcome::Failed { job: job_id };
+            };
+            match (store.get_blob(input), store.get_blob(&baseline.blob)) {
+                (Some(new), Some(gold)) => kerf_engine::diff(
+                    &String::from_utf8_lossy(&new),
+                    &String::from_utf8_lossy(&gold),
+                    job.resolution_um,
+                ),
+                _ => {
+                    queue.nack(job_id);
+                    return Outcome::Failed { job: job_id };
+                }
+            }
+        }
+    };
+
+    // For a baseline check, decide regression (material differs from the golden part) before the
+    // envelope is moved into the store.
+    let regression = if let JobSpec::Baseline { project, .. } = &job.spec {
+        let identical = envelope.summary.identical.unwrap_or(true);
+        let both_empty = envelope.summary.both_empty.unwrap_or(false);
+        (!identical && !both_empty).then(|| (project.clone(), envelope.summary.iou))
+    } else {
+        None
     };
 
     match store.complete_job(job_id, envelope) {
         Ok(result) => {
             queue.ack(job_id);
+            if let Some((project, iou)) = regression {
+                store.record_alert(
+                    &job.tenant,
+                    &project,
+                    result,
+                    iou,
+                    "deposited material differs from the registered baseline",
+                );
+            }
             Outcome::Completed {
                 job: job_id,
                 result,
@@ -121,6 +157,55 @@ mod tests {
         assert_eq!(stored.envelope.summary.ok, Some(true));
         assert_eq!(queue.pending(), 0);
         assert!(queue.dead_letters().is_empty());
+    }
+
+    #[test]
+    fn baseline_check_identical_raises_no_alert() {
+        let store = MemStore::new();
+        let queue = MemQueue::default();
+        let gold = store.put_blob(GCODE.as_bytes());
+        store.set_baseline("acme", "widget", gold, 200);
+        let input = store.put_blob(GCODE.as_bytes()); // same part
+        let job = store.create_job(
+            "acme",
+            JobSpec::Baseline {
+                project: "widget".into(),
+                input,
+            },
+            200,
+        );
+        queue.enqueue(job);
+        assert!(matches!(
+            process_one(&store, &queue),
+            Outcome::Completed { .. }
+        ));
+        assert!(store.list_alerts("acme").is_empty()); // identical → no regression
+    }
+
+    #[test]
+    fn baseline_check_regression_raises_alert() {
+        let store = MemStore::new();
+        let queue = MemQueue::default();
+        let gold = store.put_blob(GCODE.as_bytes());
+        store.set_baseline("acme", "widget", gold, 200);
+        let changed = GCODE.replace("X10 Y10", "X10 Y40"); // a different part
+        let input = store.put_blob(changed.as_bytes());
+        let job = store.create_job(
+            "acme",
+            JobSpec::Baseline {
+                project: "widget".into(),
+                input,
+            },
+            200,
+        );
+        queue.enqueue(job);
+        assert!(matches!(
+            process_one(&store, &queue),
+            Outcome::Completed { .. }
+        ));
+        let alerts = store.list_alerts("acme");
+        assert_eq!(alerts.len(), 1);
+        assert!(alerts[0].message.contains("baseline"));
     }
 
     #[test]

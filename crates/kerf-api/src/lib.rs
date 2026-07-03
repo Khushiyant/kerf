@@ -16,7 +16,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use kerf_queue::Queue;
-use kerf_store::{Job, JobSpec, Store, StoredResult};
+use kerf_store::{Alert, Job, JobSpec, Store, StoredResult};
 
 const DEFAULT_RESOLUTION_UM: i64 = 200;
 
@@ -41,6 +41,9 @@ pub fn build_router(state: AppState) -> Router {
         .route("/v1/jobs", get(list_jobs))
         .route("/v1/jobs/{id}", get(get_job))
         .route("/v1/results/{id}", get(get_result))
+        .route("/v1/projects/{project}/baseline", post(put_baseline))
+        .route("/v1/projects/{project}/check", post(post_check))
+        .route("/v1/alerts", get(get_alerts))
         .with_state(state)
 }
 
@@ -145,6 +148,50 @@ async fn list_jobs(
 ) -> Result<Json<Vec<Job>>, StatusCode> {
     let tenant = authorize(&headers, &st)?;
     Ok(Json(st.store.list_jobs(&tenant)))
+}
+
+/// Register (or replace) a project's baseline golden part.
+async fn put_baseline(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(project): Path<String>,
+    Json(req): Json<VerifyReq>,
+) -> Result<StatusCode, StatusCode> {
+    let tenant = authorize(&headers, &st)?;
+    let res = resolution(req.resolution_um)?;
+    let blob = st.store.put_blob(req.gcode.as_bytes());
+    st.store.set_baseline(&tenant, &project, blob, res);
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Submit a file to be checked against a project's baseline (raises an alert on regression).
+async fn post_check(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(project): Path<String>,
+    Json(req): Json<VerifyReq>,
+) -> Result<(StatusCode, Json<JobAccepted>), StatusCode> {
+    let tenant = authorize(&headers, &st)?;
+    let res = resolution(req.resolution_um)?;
+    let blob = st.store.put_blob(req.gcode.as_bytes());
+    let job = st.store.create_job(
+        &tenant,
+        JobSpec::Baseline {
+            project,
+            input: blob,
+        },
+        res,
+    );
+    st.queue.enqueue(job);
+    Ok((StatusCode::ACCEPTED, Json(JobAccepted { job_id: job })))
+}
+
+async fn get_alerts(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<Alert>>, StatusCode> {
+    let tenant = authorize(&headers, &st)?;
+    Ok(Json(st.store.list_alerts(&tenant)))
 }
 
 async fn dashboard() -> Html<&'static str> {
@@ -291,6 +338,76 @@ mod tests {
         assert_eq!(code, StatusCode::OK);
         let v: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!(v["envelope"]["summary"]["ok"], serde_json::json!(true));
+    }
+
+    fn json_req(
+        method: &str,
+        uri: &str,
+        key: Option<&str>,
+        body: serde_json::Value,
+    ) -> Request<Body> {
+        let mut b = Request::builder()
+            .method(method)
+            .uri(uri)
+            .header("content-type", "application/json");
+        if let Some(k) = key {
+            b = b.header("x-api-key", k);
+        }
+        b.body(Body::from(serde_json::to_vec(&body).unwrap()))
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn baseline_regression_surfaces_an_alert() {
+        let (st, store, queue) = state();
+        let app = build_router(st);
+
+        // Register the golden part.
+        let (code, _) = send(
+            app.clone(),
+            json_req(
+                "POST",
+                "/v1/projects/widget/baseline",
+                Some("dev"),
+                serde_json::json!({ "gcode": GCODE }),
+            ),
+        )
+        .await;
+        assert_eq!(code, StatusCode::NO_CONTENT);
+
+        // Submit a *changed* part for checking.
+        let changed = GCODE.replace("X10 Y10", "X10 Y40");
+        let (code, _) = send(
+            app.clone(),
+            json_req(
+                "POST",
+                "/v1/projects/widget/check",
+                Some("dev"),
+                serde_json::json!({ "gcode": changed }),
+            ),
+        )
+        .await;
+        assert_eq!(code, StatusCode::ACCEPTED);
+
+        // Worker processes the check.
+        assert!(matches!(
+            kerf_worker::process_one(store.as_ref(), queue.as_ref()),
+            kerf_worker::Outcome::Completed { .. }
+        ));
+
+        // The regression shows up as an alert.
+        let (code, body) = send(
+            app,
+            Request::builder()
+                .uri("/v1/alerts")
+                .header("x-api-key", "dev")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(code, StatusCode::OK);
+        let alerts: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(alerts.as_array().unwrap().len(), 1);
     }
 
     #[tokio::test]

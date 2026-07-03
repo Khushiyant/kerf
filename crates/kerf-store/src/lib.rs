@@ -35,8 +35,39 @@ pub enum StoreError {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum JobSpec {
-    Verify { input: BlobId },
-    Diff { a: BlobId, b: BlobId },
+    Verify {
+        input: BlobId,
+    },
+    Diff {
+        a: BlobId,
+        b: BlobId,
+    },
+    /// Diff `input` against the registered baseline ("golden part") of a project, raising an alert if
+    /// the deposited material regressed.
+    Baseline {
+        project: String,
+        input: BlobId,
+    },
+}
+
+/// A project's registered "golden part": new submissions are diffed against it.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Baseline {
+    pub tenant: String,
+    pub project: String,
+    pub blob: BlobId,
+    pub resolution_um: i64,
+}
+
+/// A regression alert: a baseline check whose deposited material differed from the golden part.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct Alert {
+    pub id: u64,
+    pub tenant: String,
+    pub project: String,
+    pub result_id: ResultId,
+    pub iou: Option<f64>,
+    pub message: String,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -95,6 +126,20 @@ pub trait Store: Send + Sync {
     fn complete_job(&self, id: JobId, envelope: VerdictEnvelope) -> Result<ResultId, StoreError>;
     fn get_result(&self, id: ResultId) -> Option<StoredResult>;
     fn list_jobs(&self, tenant: &str) -> Vec<Job>;
+
+    /// Register (or replace) a project's baseline golden part.
+    fn set_baseline(&self, tenant: &str, project: &str, blob: BlobId, resolution_um: i64);
+    fn get_baseline(&self, tenant: &str, project: &str) -> Option<Baseline>;
+    /// Record a regression alert; returns its id.
+    fn record_alert(
+        &self,
+        tenant: &str,
+        project: &str,
+        result_id: ResultId,
+        iou: Option<f64>,
+        message: &str,
+    ) -> u64;
+    fn list_alerts(&self, tenant: &str) -> Vec<Alert>;
 }
 
 #[derive(Default)]
@@ -106,6 +151,10 @@ struct Inner {
     next_result: ResultId,
     /// Per-tenant chain tail: (last chain_seq, last result_digest).
     chain: HashMap<String, (u64, String)>,
+    /// Baseline per (tenant, project).
+    baselines: HashMap<(String, String), Baseline>,
+    alerts: Vec<Alert>,
+    next_alert: u64,
 }
 
 /// In-memory [`Store`] — the Phase-1 backend; also the reference for the Postgres implementation.
@@ -217,6 +266,61 @@ impl Store for MemStore {
         v.sort_by_key(|j| j.id);
         v
     }
+
+    fn set_baseline(&self, tenant: &str, project: &str, blob: BlobId, resolution_um: i64) {
+        let mut g = self.inner.lock().unwrap();
+        g.baselines.insert(
+            (tenant.to_string(), project.to_string()),
+            Baseline {
+                tenant: tenant.to_string(),
+                project: project.to_string(),
+                blob,
+                resolution_um,
+            },
+        );
+    }
+
+    fn get_baseline(&self, tenant: &str, project: &str) -> Option<Baseline> {
+        self.inner
+            .lock()
+            .unwrap()
+            .baselines
+            .get(&(tenant.to_string(), project.to_string()))
+            .cloned()
+    }
+
+    fn record_alert(
+        &self,
+        tenant: &str,
+        project: &str,
+        result_id: ResultId,
+        iou: Option<f64>,
+        message: &str,
+    ) -> u64 {
+        let mut g = self.inner.lock().unwrap();
+        let id = g.next_alert;
+        g.next_alert += 1;
+        g.alerts.push(Alert {
+            id,
+            tenant: tenant.to_string(),
+            project: project.to_string(),
+            result_id,
+            iou,
+            message: message.to_string(),
+        });
+        id
+    }
+
+    fn list_alerts(&self, tenant: &str) -> Vec<Alert> {
+        self.inner
+            .lock()
+            .unwrap()
+            .alerts
+            .iter()
+            .filter(|a| a.tenant == tenant)
+            .cloned()
+            .collect()
+    }
 }
 
 #[cfg(test)]
@@ -286,6 +390,21 @@ mod tests {
         assert_eq!(s2.chain_seq, 1);
         // The second result links to the first — a tamper-evident chain.
         assert_eq!(s2.prev_digest.as_deref(), Some(s1.result_digest.as_str()));
+    }
+
+    #[test]
+    fn baselines_and_alerts() {
+        let s = MemStore::new();
+        let gold = s.put_blob(GCODE.as_bytes());
+        s.set_baseline("acme", "widget", gold.clone(), 200);
+        assert_eq!(s.get_baseline("acme", "widget").unwrap().blob, gold);
+        assert!(s.get_baseline("acme", "unknown").is_none());
+        assert!(s.get_baseline("globex", "widget").is_none()); // tenant-scoped
+
+        let aid = s.record_alert("acme", "widget", 0, Some(0.5), "regressed");
+        assert_eq!(aid, 0);
+        assert_eq!(s.list_alerts("acme").len(), 1);
+        assert_eq!(s.list_alerts("globex").len(), 0); // tenant-isolated
     }
 
     #[test]
