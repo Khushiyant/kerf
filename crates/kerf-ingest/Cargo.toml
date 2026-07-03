@@ -1,0 +1,15 @@
+[package]
+name = "kerf-ingest"
+description = "Watch-folder ingest agent for the Kerf platform: submit new G-code files for verification."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+kerf-store = { path = "../kerf-store" }
+kerf-queue = { path = "../kerf-queue" }
