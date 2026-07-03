@@ -66,9 +66,13 @@ pub fn build_router(state: AppState) -> Router {
         .route("/v1/projects/{project}/check", post(post_check))
         .route("/v1/alerts", get(get_alerts))
         .with_state(state);
-    // Per-request OpenTelemetry spans when built with the `otel` feature.
+    // Per-request OpenTelemetry spans when built with the `otel` feature. The span is emitted at INFO
+    // so the default `info` filter keeps it (tower-http defaults to DEBUG, which would be dropped).
     #[cfg(feature = "otel")]
-    let app = app.layer(tower_http::trace::TraceLayer::new_for_http());
+    let app = app.layer(
+        tower_http::trace::TraceLayer::new_for_http()
+            .make_span_with(tower_http::trace::DefaultMakeSpan::new().level(tracing::Level::INFO)),
+    );
     app
 }
 
