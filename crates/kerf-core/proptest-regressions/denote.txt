@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 22771ecb9d6205552e6a2cd87207f1ce640cecb9d111d12537742beacdd4ef24 # shrinks to prog = Program { layers: [Layer { z_um: 0, regions: [Region { kind: Perimeter, boundary: Area { outer: Polyline { points: [] }, holes: [] }, fills: [ExtrudePath { path: Polyline { points: [Point { x: 0, y: 1 }] }, width_um: 100 }] }] }] }

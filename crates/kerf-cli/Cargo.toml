@@ -1,0 +1,20 @@
+[package]
+name = "kerf-cli"
+description = "Command-line interface for the Kerf G-code verifier (verify / inspect / diff)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme = "../../README.md"
+
+[[bin]]
+name = "kerf"
+path = "src/main.rs"
+
+[dependencies]
+kerf-core = { path = "../kerf-core", version = "1.0.0", features = ["serde"] }

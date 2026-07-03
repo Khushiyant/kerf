@@ -1,0 +1,17 @@
+[package]
+name = "kerf-py"
+description = "PyO3 bindings over kerf-core."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "_kerf"
+crate-type = ["cdylib"]
+
+[dependencies]
+kerf-core = { path = "../kerf-core", features = ["serde"] }
+# abi3-py312 builds a single wheel usable on CPython >= 3.12 (kerf-py touches no version-specific
+# C-API). Keep pyo3 at 0.23 — abi3 does not require a newer pyo3; a 0.29 bump waits for 3.13/3.14 needs.
+pyo3 = { version = "0.23", features = ["extension-module", "abi3-py312"] }

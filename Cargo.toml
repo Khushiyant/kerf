@@ -1,0 +1,17 @@
+[workspace]
+resolver = "2"
+members = ["crates/kerf-core", "crates/kerf-py", "crates/kerf-cli"]
+
+[workspace.package]
+version = "1.0.0"
+edition = "2021"
+rust-version = "1.90"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/khushiyant/kerf"
+homepage = "https://github.com/khushiyant/kerf"
+authors = ["Khushiyant <khushiyant2002@gmail.com>"]
+keywords = ["3d-printing", "gcode", "verification", "slicer", "fabrication"]
+categories = ["science", "command-line-utilities", "parsing"]
+
+[profile.release]
+lto = "thin"
