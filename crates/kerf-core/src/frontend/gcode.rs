@@ -6,9 +6,9 @@
 //!    (M82, the default) vs. relative (M83) E is tracked; `G92 E` resets the baseline. The
 //!    extrude/travel/zero-length decision is made on the *rounded micron* displacement, so a
 //!    sub-micron move never produces a degenerate zero-length segment or an absurd width.
-//!  - **Layers are opened only by markers** (`;LAYER:`, `;LAYER_CHANGE`, `; CHANGE_LAYER`, and the
-//!    `;BEFORE_LAYER_CHANGE` / `;AFTER_LAYER_CHANGE` hooks real PrusaSlicer emits) or the
-//!    first extrusion. The layer Z is the `;Z:` / `; Z_HEIGHT:` value when present, else the Z of the
+//!  - **Layers are opened only by markers** (Cura `;LAYER:`, PrusaSlicer/Orca `;LAYER_CHANGE` and the
+//!    `;BEFORE_LAYER_CHANGE` / `;AFTER_LAYER_CHANGE` hooks, Bambu `; CHANGE_LAYER`, Simplify3D
+//!    `; layer N, Z = <mm>`) or the first extrusion. The layer Z is the `;Z:` / `; Z_HEIGHT:` value when present, else the Z of the
 //!    triggering extrusion — *never* a Z reached only by a travel hop, so Z-hops never create a
 //!    spurious layer or misfile geometry at the hop height.
 //!  - **Trust boundary.** Geometry (XY polyline, Z, extrude/travel) is TRUSTED. Feature ROLE
@@ -196,6 +196,11 @@ impl Parser {
             self.cur_role = None;
             self.cur_role_known = false;
             self.cur_role_raw = None;
+            // Simplify3D encodes the layer height inline, e.g. "; layer 1, Z = 0.18".
+            if let Some(mm) = inline_z_mm(com) {
+                self.z = mm;
+                self.pending_layer_z_um = mm_to_um(mm);
+            }
         } else if let Some(v) = com
             .strip_prefix(";Z:")
             .or_else(|| com.strip_prefix("; Z_HEIGHT:"))
@@ -226,6 +231,19 @@ impl Parser {
                         self.width_um = Some(w);
                         self.width_epoch += 1;
                     }
+                }
+            }
+        } else if let Some(mapped) = s3d_role(com) {
+            // Simplify3D bare role comments (no ;TYPE: prefix), e.g. "; outer perimeter", "; infill".
+            self.cur_role_raw = Some(com.trim_start_matches("; ").to_string());
+            match mapped {
+                Some(rk) => {
+                    self.cur_role = Some(rk);
+                    self.cur_role_known = true;
+                }
+                None => {
+                    self.cur_role = Some(RegionKind::Perimeter);
+                    self.cur_role_known = false;
                 }
             }
         }
@@ -617,7 +635,11 @@ fn classify_role(v: &str) -> Option<RegionKind> {
         "Solid infill" | "Top solid infill" | "Bridge infill" | "Ironing" => Some(Skin),
         "Support material" | "Support material interface" => Some(Support),
         // OrcaSlicer / Bambu
-        "Inner wall" | "Outer wall" | "Overhang wall" => Some(Perimeter),
+        "Inner wall"
+        | "Outer wall"
+        | "Overhang wall"
+        | "Floating vertical shell"
+        | "Floating interface shell" => Some(Perimeter),
         "Sparse infill" | "Gap infill" => Some(Infill),
         "Internal solid infill"
         | "Top surface"
@@ -638,6 +660,42 @@ fn is_layer_marker(com: &str) -> bool {
         com,
         ";LAYER_CHANGE" | "; CHANGE_LAYER" | ";BEFORE_LAYER_CHANGE" | ";AFTER_LAYER_CHANGE"
     ) || com.starts_with(";LAYER:")
+        || is_s3d_layer(com)
+}
+
+/// Simplify3D layer marker: `"; layer 1, Z = 0.18"` (a digit right after `"; layer "`). Excludes the
+/// `"; layer end"` sentinel.
+fn is_s3d_layer(com: &str) -> bool {
+    com.strip_prefix("; layer ")
+        .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()))
+}
+
+/// Extract an inline `Z = <mm>` value from a comment (Simplify3D layer markers). Returns the leading
+/// numeric value after the first `=` that follows a `Z`.
+fn inline_z_mm(com: &str) -> Option<f64> {
+    let z = com.find('Z')?;
+    let eq = com[z..].find('=')?;
+    let rest = com[z + eq + 1..].trim_start();
+    let num: String = rest
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || matches!(c, '.' | '-' | '+'))
+        .collect();
+    num.parse::<f64>().ok().filter(|v| v.is_finite())
+}
+
+/// Simplify3D bare role comments (no `;TYPE:` prefix). `Some(Some(k))` = a mapped role, `Some(None)` =
+/// a recognized-but-non-structural role (skirt/brim), `None` = not an S3D role comment (ignore it).
+fn s3d_role(com: &str) -> Option<Option<RegionKind>> {
+    use RegionKind::*;
+    match com {
+        "; outer perimeter" | "; inner perimeter" => Some(Some(Perimeter)),
+        "; infill" => Some(Some(Infill)),
+        "; solid layer" => Some(Some(Skin)),
+        "; bridge" => Some(Some(Skin)),
+        "; support" | "; dense support" => Some(Some(Support)),
+        "; skirt" | "; brim" | "; prime pillar" => Some(None),
+        _ => None,
+    }
 }
 
 /// Split a physical line into (code, comment). Removes balanced `(...)` spans; the comment is
@@ -1000,6 +1058,25 @@ mod tests {
             r.program.layers.iter().map(|l| l.z_um).collect::<Vec<_>>(),
             vec![200, 400]
         );
+    }
+
+    #[test]
+    fn simplify3d_layers_and_bare_roles() {
+        // Simplify3D convention (found by testing on real S3D 3.1.0 output): "; layer N, Z = <mm>"
+        // markers and BARE role comments with no ;TYPE: prefix. Previously collapsed to 1 layer with
+        // every move an unknown-role fallback.
+        let s3d = "; G-Code generated by Simplify3D(R) Version 3.1.0\nM82\nG28\n; layer 1, Z = 0.18\n; outer perimeter\nG1 X10 Y10 E.5\nG1 X20 Y10 E1.0\n; infill\nG1 X20 Y20 E1.5\n; layer 2, Z = 0.36\n; outer perimeter\nG1 X10 Y10 E2.0\nG1 X20 Y10 E2.5";
+        let r = parse(s3d);
+        assert_eq!(
+            r.program.layers.iter().map(|l| l.z_um).collect::<Vec<_>>(),
+            vec![180, 360]
+        );
+        assert!(
+            r.diagnostics.unknown_roles.is_empty(),
+            "roles unrecognized: {:?}",
+            r.diagnostics.unknown_roles
+        );
+        assert_eq!(r.diagnostics.fallback_role_moves, 0);
     }
 
     #[test]

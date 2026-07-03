@@ -4,11 +4,21 @@ All notable changes to Kerf are documented here. Versions follow [SemVer](https:
 
 ## [Unreleased]
 
-### Fixed
-- **Real-world layer segmentation.** Recognize PrusaSlicer's `;BEFORE_LAYER_CHANGE` /
-  `;AFTER_LAYER_CHANGE` custom-gcode hooks as layer boundaries. Found by running on a real
-  PrusaSlicer 2.1.1 3DBenchy (136k lines): it previously collapsed all 241 layers into one. Now
-  segments correctly and verifies SOUND in ~0.7 s.
+### Fixed (found by testing on real slicer output)
+- **PrusaSlicer layer segmentation.** Recognize `;BEFORE_LAYER_CHANGE` / `;AFTER_LAYER_CHANGE`
+  custom-gcode hooks as layer boundaries. A real PrusaSlicer 2.1.1 3DBenchy (136k lines) previously
+  collapsed all 241 layers into one; now segments correctly and verifies SOUND in ~0.7 s.
+- **Simplify3D vocabulary.** Recognize `; layer N, Z = <mm>` layer markers (with inline Z) and the
+  bare role comments (`; outer perimeter`, `; inner perimeter`, `; infill`, `; solid layer`,
+  `; support`, `; bridge`, `; skirt`) that have no `;TYPE:` prefix. A real Simplify3D 3.1.0 file (106
+  layers) previously collapsed to 1 layer with every move an unknown-role fallback; now segments to
+  106 layers with roles recovered.
+- **OrcaSlicer/Bambu roles.** Map `Floating vertical shell` / `Floating interface shell` to Perimeter.
+
+### Validated
+- Ran on real output from Cura (3.6, 5.3), PrusaSlicer (2.1, 2.7), BambuStudio/OrcaSlicer (BBL),
+  Simplify3D (3.1), and ArcWelder-processed arcs — no panics, no unsound verdicts; geometry and (post-fix)
+  layer/role recovery correct across all.
 
 ## [1.0.0]
 
