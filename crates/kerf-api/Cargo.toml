@@ -18,6 +18,7 @@ path = "src/main.rs"
 kerf-store = { path = "../kerf-store" }
 kerf-queue = { path = "../kerf-queue" }
 kerf-worker = { path = "../kerf-worker" }
+kerf-render = { path = "../kerf-render" }
 axum = "0.8"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "sync"] }
 serde = { version = "1", features = ["derive"] }

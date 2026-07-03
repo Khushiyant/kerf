@@ -7,9 +7,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::{
-    extract::{Path, State},
-    http::{HeaderMap, StatusCode},
-    response::Html,
+    extract::{Path, Query, State},
+    http::{header, HeaderMap, StatusCode},
+    response::{Html, IntoResponse},
     routing::{get, post},
     Json, Router,
 };
@@ -41,6 +41,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/v1/jobs", get(list_jobs))
         .route("/v1/jobs/{id}", get(get_job))
         .route("/v1/results/{id}", get(get_result))
+        .route("/v1/results/{id}/diff.png", get(get_diff_png))
         .route("/v1/projects/{project}/baseline", post(put_baseline))
         .route("/v1/projects/{project}/check", post(post_check))
         .route("/v1/alerts", get(get_alerts))
@@ -192,6 +193,64 @@ async fn get_alerts(
 ) -> Result<Json<Vec<Alert>>, StatusCode> {
     let tenant = authorize(&headers, &st)?;
     Ok(Json(st.store.list_alerts(&tenant)))
+}
+
+#[derive(Deserialize)]
+struct LayerQuery {
+    #[serde(default)]
+    layer: usize,
+}
+
+/// Render the visual diff of a diff/baseline result to a PNG (`?layer=N` selects the layer, default 0).
+async fn get_diff_png(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<u64>,
+    Query(q): Query<LayerQuery>,
+) -> Result<impl IntoResponse, StatusCode> {
+    let tenant = authorize(&headers, &st)?;
+    let result = st
+        .store
+        .get_result(id)
+        .filter(|r| r.tenant == tenant)
+        .ok_or(StatusCode::NOT_FOUND)?;
+    let job = st
+        .store
+        .get_job(result.job_id)
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    // Recover the two inputs to diff, depending on the job kind.
+    let (a_id, b_id) = match &job.spec {
+        JobSpec::Diff { a, b } => (a.clone(), b.clone()),
+        JobSpec::Baseline { project, input } => {
+            let baseline = st
+                .store
+                .get_baseline(&tenant, project)
+                .ok_or(StatusCode::NOT_FOUND)?;
+            (input.clone(), baseline.blob)
+        }
+        JobSpec::Verify { .. } => return Err(StatusCode::BAD_REQUEST), // nothing to diff
+    };
+    let (Some(a), Some(b)) = (st.store.get_blob(&a_id), st.store.get_blob(&b_id)) else {
+        return Err(StatusCode::NOT_FOUND);
+    };
+
+    let res = job.resolution_um;
+    let layer = q.layer;
+    // Rendering re-runs denote (CPU) — keep it off the async reactor.
+    let png = tokio::task::spawn_blocking(move || {
+        let a = String::from_utf8_lossy(&a).into_owned();
+        let b = String::from_utf8_lossy(&b).into_owned();
+        kerf_render::diff_pngs_from_gcode(&a, &b, res, 512)
+            .into_iter()
+            .nth(layer)
+            .map(|(_, png)| png)
+    })
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    .ok_or(StatusCode::NOT_FOUND)?;
+
+    Ok(([(header::CONTENT_TYPE, "image/png")], png))
 }
 
 async fn dashboard() -> Html<&'static str> {
@@ -408,6 +467,61 @@ mod tests {
         assert_eq!(code, StatusCode::OK);
         let alerts: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!(alerts.as_array().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn diff_result_renders_a_png() {
+        let (st, store, queue) = state();
+        let app = build_router(st);
+        // Submit a diff of two different files.
+        let changed = GCODE.replace("X10 Y10", "X10 Y40");
+        let (code, body) = send(
+            app.clone(),
+            json_req(
+                "POST",
+                "/v1/diff",
+                Some("dev"),
+                serde_json::json!({ "a": GCODE, "b": changed }),
+            ),
+        )
+        .await;
+        assert_eq!(code, StatusCode::ACCEPTED);
+        let job_id = serde_json::from_str::<serde_json::Value>(&body).unwrap()["job_id"]
+            .as_u64()
+            .unwrap();
+
+        assert!(matches!(
+            kerf_worker::process_one(store.as_ref(), queue.as_ref()),
+            kerf_worker::Outcome::Completed { .. }
+        ));
+        // The result id equals the job id here (first job, first result), but fetch it properly.
+        let (_, jbody) = send(
+            app.clone(),
+            Request::builder()
+                .uri(format!("/v1/jobs/{job_id}"))
+                .header("x-api-key", "dev")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        let rid = serde_json::from_str::<serde_json::Value>(&jbody).unwrap()["result_id"]
+            .as_u64()
+            .unwrap();
+
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/v1/results/{rid}/diff.png"))
+                    .header("x-api-key", "dev")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(resp.headers().get("content-type").unwrap(), "image/png");
+        let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n");
     }
 
     #[tokio::test]
