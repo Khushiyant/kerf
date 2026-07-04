@@ -1,0 +1,176 @@
+name: release
+
+# Fully automatic, conventional-commit driven. On every push to main, the version is computed from
+# the commit messages (feat -> minor, fix/perf -> patch, feat! / BREAKING CHANGE -> major). If a
+# release is warranted, the version is bumped in Cargo.toml, pyproject.toml, the kerf-cli -> kerf-core
+# pin and Cargo.lock, committed back as "chore(release): vX.Y.Z [skip ci]", tagged, and published to
+# crates.io + PyPI + GHCR. No PRs, no manual tags. Commits that warrant no release (docs/chore/ci/...)
+# do nothing.
+
+on:
+  push:
+    branches: [main]
+
+concurrency: release
+
+permissions:
+  contents: write
+
+jobs:
+  version:
+    name: compute + tag version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.tag.outputs.new_version }}
+      tag: ${{ steps.tag.outputs.new_tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: compute next version
+        id: tag
+        uses: mathieudutour/github-tag-action@v6.2
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          release_branches: main
+          default_bump: false # no release unless a feat/fix/breaking commit warrants one
+          dry_run: true # compute only; we tag after bumping the version files
+      - uses: dtolnay/rust-toolchain@1.90.0
+        if: steps.tag.outputs.new_version != ''
+      - name: bump versions, changelog, commit + tag
+        if: steps.tag.outputs.new_version != ''
+        env:
+          V: ${{ steps.tag.outputs.new_version }}
+          T: ${{ steps.tag.outputs.new_tag }}
+          CHANGES: ${{ steps.tag.outputs.changelog }}
+        run: |
+          set -euo pipefail
+          sed -i "s/^version = \"[^\"]*\"/version = \"$V\"/" Cargo.toml
+          sed -i "s/^version = \"[^\"]*\"/version = \"$V\"/" pyproject.toml
+          sed -i "s|\(kerf-core = .*version = \)\"[^\"]*\"|\1\"$V\"|" crates/kerf-cli/Cargo.toml
+          cargo update --workspace --quiet
+          { head -1 CHANGELOG.md; printf '\n## %s (%s)\n\n%s\n' "$T" "$(date -u +%Y-%m-%d)" "$CHANGES"; tail -n +2 CHANGELOG.md; } > CHANGELOG.tmp
+          mv CHANGELOG.tmp CHANGELOG.md
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "chore(release): $T [skip ci]"
+          git tag "$T"
+          git push origin HEAD:main
+          git push origin "$T"
+
+  crates-io:
+    needs: version
+    if: needs.version.outputs.version != ''
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.tag }}
+      - uses: dtolnay/rust-toolchain@1.90.0
+      - name: publish kerf-core, then kerf-cli
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          cargo publish -p kerf-core
+          for i in $(seq 1 30); do
+            if cargo publish -p kerf-cli; then exit 0; fi
+            echo "kerf-core not indexed yet; retrying in 20s ($i/30)"; sleep 20
+          done
+          echo "::error::kerf-cli publish did not succeed"; exit 1
+
+  wheels:
+    needs: version
+    if: needs.version.outputs.version != ''
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.tag }}
+      - uses: PyO3/maturin-action@v1
+        with:
+          command: build
+          args: --release --out dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.os }}
+          path: dist/*.whl
+
+  sdist:
+    needs: version
+    if: needs.version.outputs.version != ''
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.tag }}
+      - uses: PyO3/maturin-action@v1
+        with:
+          command: sdist
+          args: --out dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-sdist
+          path: dist/*.tar.gz
+
+  pypi:
+    needs: [version, wheels, sdist]
+    if: needs.version.outputs.version != ''
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write # Trusted Publishing (OIDC) — no token stored
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: dist-*
+          merge-multiple: true
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+  container:
+    needs: version
+    if: needs.version.outputs.version != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.tag }}
+      - id: sha
+        run: echo "sha=$(git rev-parse --short=12 HEAD)" >> "$GITHUB_OUTPUT"
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          build-args: |
+            KERF_GIT_SHA=${{ steps.sha.outputs.sha }}
+          tags: |
+            ghcr.io/khushiyant/kerf:latest
+            ghcr.io/khushiyant/kerf:${{ needs.version.outputs.tag }}
+
+  github-release:
+    needs: [version, crates-io, pypi]
+    if: needs.version.outputs.version != ''
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: dist-*
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.version.outputs.tag }}
+          generate_release_notes: true
+          files: dist/*
