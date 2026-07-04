@@ -57,15 +57,11 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.90.0
-      - uses: actions/setup-python@v5
+      - uses: PyO3/maturin-action@v1
         with:
-          python-version: "3.12"
-      - name: build abi3 wheel
-        run: |
-          pip install maturin
-          maturin build --release
+          command: build
+          args: --release --out dist
       - uses: actions/upload-artifact@v4
         with:
           name: wheels-${{ matrix.os }}
-          path: target/wheels/*.whl
+          path: dist/*.whl
