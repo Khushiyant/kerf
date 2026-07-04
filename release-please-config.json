@@ -7,9 +7,9 @@
       "bump-minor-pre-major": true,
       "changelog-path": "CHANGELOG.md",
       "extra-files": [
-        "Cargo.toml",
-        "pyproject.toml",
-        "crates/kerf-cli/Cargo.toml"
+        { "type": "generic", "path": "Cargo.toml" },
+        { "type": "generic", "path": "pyproject.toml" },
+        { "type": "generic", "path": "crates/kerf-cli/Cargo.toml" }
       ]
     }
   }
