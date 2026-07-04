@@ -1,62 +1,41 @@
 # Releasing Kerf
 
-Everything here is **set up but not triggered** — a release happens only when *you* push a version tag.
-Nothing publishes on an ordinary push.
+Releases are **automated** via [release-please](https://github.com/googleapis/release-please) driven by
+[Conventional Commits](https://www.conventionalcommits.org). You never edit versions or push tags by hand.
 
-## What ships where
+## How it works
 
-| Artifact | Registry | How |
-|---|---|---|
-| `kerf-core` (library) | crates.io | `cargo publish -p kerf-core` |
-| `kerf-cli` (the `kerf` binary) | crates.io | `cargo publish -p kerf-cli` (after `kerf-core` is indexed) |
-| `pykerf` (Python, abi3 wheels + sdist) | PyPI | maturin, built for Linux/macOS/Windows |
-| Source + wheels | GitHub Releases | attached automatically |
+1. Land commits on `main` with conventional prefixes: `feat:` (→ minor), `fix:` / `perf:` (→ patch),
+   `feat!:` or a `BREAKING CHANGE:` footer (→ major, or minor while < 1.0). `docs:`/`chore:`/`ci:`/
+   `build:`/`refactor:`/`test:` don't trigger a release on their own.
+2. `.github/workflows/release-please.yml` keeps a **release PR** open that bumps the version in
+   `Cargo.toml`, `pyproject.toml`, and the `kerf-cli` → `kerf-core` pin (in lockstep), and regenerates
+   `CHANGELOG.md`.
+3. **Merge the release PR** when you want to cut the release. That creates the `vX.Y.Z` tag + GitHub
+   Release and runs the publish jobs in the same workflow:
+   - **crates.io** — `kerf-core`, then `kerf-cli` (dependency order, with index-retry).
+   - **PyPI** — `pykerf` abi3 wheels (Linux/macOS/Windows) + sdist, via Trusted Publishing (OIDC).
+   - **GHCR** — `ghcr.io/khushiyant/kerf` container, stamped with the release commit SHA.
 
-`kerf-py` is `publish = false` — it is a Python extension crate, distributed to PyPI as the `pykerf`
-wheel, never to crates.io.
+Merging the PR is the only manual step, and it's the intended "cut a release now" gate.
 
-## One-time setup (before the first release)
+## One-time setup (required before the first release publishes)
 
-1. **crates.io token** — create a token at <https://crates.io/settings/tokens> and add it as the repo
-   secret `CARGO_REGISTRY_TOKEN` (Settings → Secrets and variables → Actions).
-2. **PyPI Trusted Publishing** — the `pykerf` project does not exist on PyPI yet, so add a
-   *pending* publisher at <https://pypi.org/manage/account/publishing/>: PyPI project `pykerf`,
-   owner `khushiyant`, repo `kerf`, workflow `release.yml`, environment `pypi`. No token is stored
-   (OIDC). Then create a GitHub Actions *Environment* named `pypi`. (Fallback: skip trusted
-   publishing and instead set the `PYPI_API_TOKEN` secret and add
-   `password: ${{ secrets.PYPI_API_TOKEN }}` to the publish step.)
-3. That's it — `release.yml` already requests the right permissions (`id-token: write`,
-   `contents: write`).
-
-## Cutting a release
-
-1. Bump the version in **`Cargo.toml`** (`[workspace.package] version`) and **`pyproject.toml`**
-   (`[project] version`) — keep them in lockstep.
-2. Move the `## [Unreleased]` notes in `CHANGELOG.md` under a new `## [X.Y.Z]` heading.
-3. Commit (`chore(release): vX.Y.Z`), then tag and push the tag:
+1. **crates.io token** — create one at <https://crates.io/settings/tokens> (scopes: publish-new,
+   publish-update) and add it as the repo secret `CARGO_REGISTRY_TOKEN`:
    ```console
-   git tag vX.Y.Z
-   git push origin vX.Y.Z
+   gh secret set CARGO_REGISTRY_TOKEN -R Khushiyant/kerf
    ```
-4. The `release` workflow publishes to crates.io + PyPI and creates the GitHub Release. Watch it in the
-   Actions tab. You can also run it manually (`workflow_dispatch`) for a dry run — the crates/PyPI
-   publish steps are guarded to the tag ref.
+2. **PyPI Trusted Publishing** — `pykerf` doesn't exist on PyPI yet, so add a *pending* publisher at
+   <https://pypi.org/manage/account/publishing/>: project `pykerf`, owner `Khushiyant`, repo `kerf`,
+   workflow `release-please.yml`, environment `pypi`. (The `pypi` GitHub Environment already exists.)
 
-## Validate locally first (no publishing)
+Nothing else is needed — the container and GitHub Release use the built-in `GITHUB_TOKEN`.
+
+## Validate a build locally (no publishing)
 
 ```console
-# Rust: package + a dry-run publish of the library (never uploads)
-cargo package -p kerf-core
-cargo publish -p kerf-core --dry-run
-
-# Python: build a wheel and an sdist into ./dist (never uploads)
-maturin build --release --out dist
+cargo publish -p kerf-core --dry-run   # packages the library; never uploads
+maturin build --release --out dist     # builds the pykerf wheel
 maturin sdist --out dist
 ```
-
-## Notes
-
-- **Order matters on crates.io:** `kerf-cli` depends on `kerf-core` by version, so `kerf-core` must be
-  indexed first. `release.yml` publishes `kerf-core`, then retries `kerf-cli` until the index catches up.
-- **Container image:** `release.yml` builds `kerf-serve` from the `Dockerfile` and pushes it to
-  `ghcr.io/khushiyant/kerf` on a tag. Locally: `docker compose up --build` (see `docker-compose.yml`).
