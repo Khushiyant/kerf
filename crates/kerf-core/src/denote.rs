@@ -11,7 +11,7 @@
 //! never centre-sampling, so a feature is never missed when resolution `<=` its width. The check is
 //! only as sharp as the resolution; choose `resolution_um <=` the smallest feature that matters.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[cfg(not(kani))]
 use rayon::prelude::*;
@@ -31,6 +31,30 @@ pub struct LayerOccupancy {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Occupancy {
     pub layers: Vec<LayerOccupancy>,
+}
+
+/// Deposit of one layer: how many distinct extruding paths cover each occupied cell (>= 1). Overlap
+/// within a single path counts once; two paths crossing the same cell count twice.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LayerDeposit {
+    pub z_um: i64,
+    pub resolution_um: i64,
+    pub cells: BTreeMap<(i64, i64), u32>,
+}
+
+/// Per-cell count of distinct extruding paths over a whole program — a strictly finer denotation than
+/// [`Occupancy`], which is only the set of touched cells. It catches whole-path duplication or
+/// repetition that a set hides (laying the same path down twice compares unequal here).
+///
+/// It measures geometric coverage *multiplicity*, NOT filament volume. Over-extrusion expressed as a
+/// wider bead over the same cells, or as a higher flow/E rate (the IR carries no extrusion-amount
+/// axis), moves no cell count and is invisible to both `Deposit` and `Occupancy`. Splitting one path
+/// into two abutting paths raises the shared cells from 1 to 2 without changing deposited material,
+/// so `Deposit` equality is the intended obligation only for passes that neither split nor merge
+/// paths (e.g. pure reordering).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Deposit {
+    pub layers: Vec<LayerDeposit>,
 }
 
 /// Squared distance from point `p` to segment `a`-`b`, in f64.
@@ -123,24 +147,50 @@ fn mark_capsule(cells: &mut BTreeSet<(i64, i64)>, p: Point, q: Point, half: f64,
     }
 }
 
-/// Rasterize the swept material of a set of (path, width) pairs into a layer occupancy.
+/// The cells one path covers at resolution `r`, deduplicated within the path (so self-overlap counts
+/// once and the set is reversal-invariant).
+fn path_cells(poly: &Polyline, width_um: i64, r: i64) -> BTreeSet<(i64, i64)> {
+    let half = width_um.max(0) as f64 / 2.0; // negative width is malformed; treat as 0
+    let mut cells = BTreeSet::new();
+    let pts = &poly.points;
+    match pts.len() {
+        0 => {}
+        1 => mark_capsule(&mut cells, pts[0], pts[0], half, r),
+        _ => {
+            for seg in pts.windows(2) {
+                mark_capsule(&mut cells, seg[0], seg[1], half, r);
+            }
+        }
+    }
+    cells
+}
+
+/// Rasterize the swept material of a set of (path, width) pairs into a layer occupancy (the union of
+/// every path's covered cells).
 fn occupancy_of(paths: &[(&Polyline, i64)], z_um: i64, resolution_um: i64) -> LayerOccupancy {
     let r = resolution_um.max(1);
     let mut cells = BTreeSet::new();
     for (poly, width_um) in paths {
-        let half = (*width_um).max(0) as f64 / 2.0; // negative width is malformed; treat as 0
-        let pts = &poly.points;
-        match pts.len() {
-            0 => {}
-            1 => mark_capsule(&mut cells, pts[0], pts[0], half, r),
-            _ => {
-                for seg in pts.windows(2) {
-                    mark_capsule(&mut cells, seg[0], seg[1], half, r);
-                }
-            }
-        }
+        cells.extend(path_cells(poly, *width_um, r));
     }
     LayerOccupancy {
+        z_um,
+        resolution_um: r,
+        cells,
+    }
+}
+
+/// Rasterize the same paths into a per-cell deposition count: each path contributes at most 1 to a
+/// cell, so the count is the number of distinct paths depositing there.
+fn deposit_of(paths: &[(&Polyline, i64)], z_um: i64, resolution_um: i64) -> LayerDeposit {
+    let r = resolution_um.max(1);
+    let mut cells: BTreeMap<(i64, i64), u32> = BTreeMap::new();
+    for (poly, width_um) in paths {
+        for cell in path_cells(poly, *width_um, r) {
+            *cells.entry(cell).or_insert(0) += 1;
+        }
+    }
+    LayerDeposit {
         z_um,
         resolution_um: r,
         cells,
@@ -168,18 +218,19 @@ pub fn denote_hi(program: &hi::Program, resolution_um: i64) -> Occupancy {
 /// Map each layer to its occupancy. Layers are independent, so this fans out across cores; the
 /// order-preserving collect keeps the result identical to a serial map.
 #[cfg(not(kani))]
-fn map_layers<L, F>(layers: &[L], f: F) -> Vec<LayerOccupancy>
+fn map_layers<L, T, F>(layers: &[L], f: F) -> Vec<T>
 where
     L: Sync,
-    F: Fn(&L) -> LayerOccupancy + Sync + Send,
+    T: Send,
+    F: Fn(&L) -> T + Sync + Send,
 {
     layers.par_iter().map(f).collect()
 }
 
 #[cfg(kani)]
-fn map_layers<L, F>(layers: &[L], f: F) -> Vec<LayerOccupancy>
+fn map_layers<L, T, F>(layers: &[L], f: F) -> Vec<T>
 where
-    F: Fn(&L) -> LayerOccupancy,
+    F: Fn(&L) -> T,
 {
     layers.iter().map(f).collect()
 }
@@ -196,6 +247,36 @@ pub fn denote_lo(program: &lo::Program, resolution_um: i64) -> Occupancy {
                 .map(|t| (&t.path, t.width_um))
                 .collect();
             occupancy_of(&paths, layer.z_um, resolution_um)
+        }),
+    }
+}
+
+/// Deposition count of a high-level program: how many fills cover each cell, per layer.
+pub fn denote_hi_deposit(program: &hi::Program, resolution_um: i64) -> Deposit {
+    Deposit {
+        layers: map_layers(&program.layers, |layer| {
+            let paths: Vec<(&Polyline, i64)> = layer
+                .regions
+                .iter()
+                .flat_map(|reg| reg.fills.iter().map(|f| (&f.path, f.width_um)))
+                .collect();
+            deposit_of(&paths, layer.z_um, resolution_um)
+        }),
+    }
+}
+
+/// Deposition count of a low-level program: how many extruding toolpaths cover each cell, per layer.
+/// Unlike [`denote_lo`], a program that deposits the same path twice does not compare equal.
+pub fn denote_lo_deposit(program: &lo::Program, resolution_um: i64) -> Deposit {
+    Deposit {
+        layers: map_layers(&program.layers, |layer| {
+            let paths: Vec<(&Polyline, i64)> = layer
+                .toolpaths
+                .iter()
+                .filter(|t| t.kind.extrudes())
+                .map(|t| (&t.path, t.width_um))
+                .collect();
+            deposit_of(&paths, layer.z_um, resolution_um)
         }),
     }
 }
@@ -270,6 +351,61 @@ mod tests {
                     }],
                 }],
             }],
+        }
+    }
+
+    #[test]
+    fn deposit_counts_repeated_paths_but_occupancy_does_not() {
+        let seg = Polyline::new(vec![Point::new(0, 0), Point::new(10_000, 0)]);
+        let once = [(&seg, 400i64)];
+        let twice = [(&seg, 400i64), (&seg, 400i64)];
+        // A set unions to the same cells whether the path is laid once or twice.
+        assert_eq!(
+            occupancy_of(&once, 200, 200),
+            occupancy_of(&twice, 200, 200)
+        );
+        // Deposition count sees the difference: every covered cell is hit once vs. twice.
+        let d1 = deposit_of(&once, 200, 200);
+        let d2 = deposit_of(&twice, 200, 200);
+        assert_ne!(d1, d2);
+        assert!(!d1.cells.is_empty());
+        assert_eq!(
+            d1.cells.keys().collect::<Vec<_>>(),
+            d2.cells.keys().collect::<Vec<_>>()
+        );
+        assert!(d1.cells.values().all(|&c| c == 1));
+        assert!(d2.cells.values().all(|&c| c == 2));
+    }
+
+    #[test]
+    fn deposit_is_reversal_invariant() {
+        let fwd = Polyline::new(vec![
+            Point::new(0, 0),
+            Point::new(7000, 3000),
+            Point::new(9000, 0),
+        ]);
+        let mut rev_pts = fwd.points.clone();
+        rev_pts.reverse();
+        let rev = Polyline::new(rev_pts);
+        assert_eq!(
+            deposit_of(&[(&fwd, 400)], 200, 200),
+            deposit_of(&[(&rev, 400)], 200, 200)
+        );
+    }
+
+    #[test]
+    fn deposit_counts_paths_not_filament_so_a_single_path_is_always_one_per_cell() {
+        // Documented limitation, pinned: deposit measures how many distinct paths cover a cell, not
+        // how much material a path lays there. A single path — thin or fat — counts exactly 1
+        // everywhere, so over-extrusion expressed only as a wider bead is invisible to the oracle.
+        let seg = Polyline::new(vec![Point::new(0, 0), Point::new(6000, 0)]);
+        for w in [200i64, 400, 800, 1600] {
+            let d = deposit_of(&[(&seg, w)], 200, 200);
+            assert!(!d.cells.is_empty());
+            assert!(
+                d.cells.values().all(|&c| c == 1),
+                "width {w}: a single path must count 1 per cell"
+            );
         }
     }
 

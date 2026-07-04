@@ -5,7 +5,7 @@
 
 use crate::frontend::{parse, Diagnostics};
 use crate::metamorphic::translation_invariant;
-use crate::pass::{preserves_denotation, TravelOrder};
+use crate::pass::{preserves_denotation, preserves_deposit, TravelOrder};
 
 #[cfg(feature = "serde")]
 use serde::Serialize;
@@ -20,8 +20,11 @@ pub struct GcodeVerification {
     /// Whether any extruding geometry was recovered. If false the checks are vacuously true and
     /// [`GcodeVerification::ok`] is not satisfied.
     pub has_geometry: bool,
-    /// A Kerf pass preserved the deposited material of the parsed program.
+    /// A Kerf pass preserved the deposited material (set of covered cells) of the parsed program.
     pub pass_preserves_denotation: bool,
+    /// A Kerf pass preserved the per-cell deposition count — a stricter check that also rejects
+    /// duplicated deposition, not just changes to the touched-cell set.
+    pub pass_preserves_deposit: bool,
     /// The parsed program is translation-invariant under a whole-cell shift.
     pub translation_invariant: bool,
 }
@@ -29,7 +32,10 @@ pub struct GcodeVerification {
 impl GcodeVerification {
     /// True iff geometry was recovered and it survived Kerf's transforms unchanged.
     pub fn ok(&self) -> bool {
-        self.has_geometry && self.pass_preserves_denotation && self.translation_invariant
+        self.has_geometry
+            && self.pass_preserves_denotation
+            && self.pass_preserves_deposit
+            && self.translation_invariant
     }
 }
 
@@ -44,6 +50,7 @@ pub fn verify_gcode(gcode: &str, resolution_um: i64) -> GcodeVerification {
             prog,
             resolution_um,
         ),
+        pass_preserves_deposit: preserves_deposit(&TravelOrder::default(), prog, resolution_um),
         translation_invariant: translation_invariant(prog, 3, 5, resolution_um),
         resolution_um,
         diagnostics: report.diagnostics,
@@ -76,6 +83,10 @@ mod tests {
         assert!(
             v.pass_preserves_denotation,
             "TravelOrder changed the parsed print"
+        );
+        assert!(
+            v.pass_preserves_deposit,
+            "TravelOrder changed per-cell deposition while only reordering"
         );
         assert!(v.translation_invariant);
         assert!(v.ok());

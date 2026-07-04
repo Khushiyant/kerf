@@ -7,7 +7,7 @@ pub mod travel_order;
 
 pub use travel_order::TravelOrder;
 
-use crate::denote::denote_lo;
+use crate::denote::{denote_lo, denote_lo_deposit};
 use crate::ir::lo;
 
 /// A denotation-preserving transform over the low-level move plan.
@@ -21,6 +21,16 @@ pub trait Pass {
 /// Does `pass` preserve the program's denotation at this resolution?
 pub fn preserves_denotation<P: Pass>(pass: &P, program: &lo::Program, resolution_um: i64) -> bool {
     denote_lo(program, resolution_um) == denote_lo(&pass.run(program.clone()), resolution_um)
+}
+
+/// Does `pass` preserve the per-cell count of distinct extruding paths? Stricter than
+/// [`preserves_denotation`]: it rejects whole-path duplication or repetition (e.g. laying a path down
+/// twice), which set-equality cannot see. A pure reorder/reverse pass like [`TravelOrder`] preserves
+/// it. It counts paths, not filament, so it does not detect over-extrusion via bead width or flow,
+/// and it is the intended obligation only for passes that neither split nor merge paths.
+pub fn preserves_deposit<P: Pass>(pass: &P, program: &lo::Program, resolution_um: i64) -> bool {
+    denote_lo_deposit(program, resolution_um)
+        == denote_lo_deposit(&pass.run(program.clone()), resolution_um)
 }
 
 /// The identity pass; trivially denotation-preserving.
@@ -96,5 +106,31 @@ mod tests {
             }],
         };
         assert!(!preserves_denotation(&DropFirstExtrude, &prog, 200));
+    }
+
+    /// A pass that lays the first extruding move down a second time — the classic over-extrusion bug.
+    struct DuplicateFirstExtrude;
+    impl Pass for DuplicateFirstExtrude {
+        fn name(&self) -> &str {
+            "buggy-duplicate-first"
+        }
+        fn run(&self, mut program: lo::Program) -> lo::Program {
+            for layer in &mut program.layers {
+                if let Some(pos) = layer.toolpaths.iter().position(|t| t.kind.extrudes()) {
+                    let dup = layer.toolpaths[pos].clone();
+                    layer.toolpaths.insert(pos + 1, dup);
+                }
+            }
+            program
+        }
+    }
+
+    #[test]
+    fn deposit_oracle_catches_double_deposition_the_set_oracle_misses() {
+        let prog = one_segment_program();
+        // The set-based oracle is fooled: unioning a duplicate path changes no occupied cell.
+        assert!(preserves_denotation(&DuplicateFirstExtrude, &prog, 200));
+        // The deposit oracle is not: the doubled material is a real, detected difference.
+        assert!(!preserves_deposit(&DuplicateFirstExtrude, &prog, 200));
     }
 }

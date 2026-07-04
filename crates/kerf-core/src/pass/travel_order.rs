@@ -179,7 +179,7 @@ mod proptests {
     use super::*;
     use crate::ir::lo::{Layer, Toolpath};
     use crate::ir::RegionKind;
-    use crate::pass::preserves_denotation;
+    use crate::pass::{preserves_denotation, preserves_deposit};
     use proptest::prelude::*;
 
     fn arb_point() -> impl Strategy<Value = Point> {
@@ -216,10 +216,17 @@ mod proptests {
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(48))]
 
-        // For any program, reordering never changes the deposited material.
+        // For any program, reordering never changes the deposited material...
         #[test]
         fn travel_order_preserves_denotation(prog in arb_program()) {
             prop_assert!(preserves_denotation(&TravelOrder::default(), &prog, 300));
+        }
+
+        // ...nor the per-cell deposition count (the stricter oracle): reorder/reverse never
+        // duplicates, splits, or merges a path.
+        #[test]
+        fn travel_order_preserves_deposit(prog in arb_program()) {
+            prop_assert!(preserves_deposit(&TravelOrder::default(), &prog, 300));
         }
     }
 }

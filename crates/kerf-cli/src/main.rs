@@ -124,6 +124,10 @@ fn cmd_verify(src: &str, resolution_um: i64, json_out: bool) -> Result<ExitCode,
             yesno(v.pass_preserves_denotation)
         );
         println!(
+            "  pass preserves deposition:  {}",
+            yesno(v.pass_preserves_deposit)
+        );
+        println!(
             "  translation-invariant:      {}",
             yesno(v.translation_invariant)
         );
