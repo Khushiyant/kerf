@@ -9,20 +9,22 @@ Nothing publishes on an ordinary push.
 |---|---|---|
 | `kerf-core` (library) | crates.io | `cargo publish -p kerf-core` |
 | `kerf-cli` (the `kerf` binary) | crates.io | `cargo publish -p kerf-cli` (after `kerf-core` is indexed) |
-| `kerf` (Python, abi3 wheels + sdist) | PyPI | maturin, built for Linux/macOS/Windows |
+| `pykerf` (Python, abi3 wheels + sdist) | PyPI | maturin, built for Linux/macOS/Windows |
 | Source + wheels | GitHub Releases | attached automatically |
 
-`kerf-py` is `publish = false` — it is a Python extension crate, distributed to PyPI as the `kerf`
+`kerf-py` is `publish = false` — it is a Python extension crate, distributed to PyPI as the `pykerf`
 wheel, never to crates.io.
 
 ## One-time setup (before the first release)
 
 1. **crates.io token** — create a token at <https://crates.io/settings/tokens> and add it as the repo
    secret `CARGO_REGISTRY_TOKEN` (Settings → Secrets and variables → Actions).
-2. **PyPI Trusted Publishing** — on PyPI, add a trusted publisher for this repo:
-   workflow `release.yml`, environment `pypi`. No token is stored (OIDC). Then create a GitHub
-   Actions *Environment* named `pypi`. (Fallback: skip trusted publishing and instead set the
-   `PYPI_API_TOKEN` secret and add `password: ${{ secrets.PYPI_API_TOKEN }}` to the publish step.)
+2. **PyPI Trusted Publishing** — the `pykerf` project does not exist on PyPI yet, so add a
+   *pending* publisher at <https://pypi.org/manage/account/publishing/>: PyPI project `pykerf`,
+   owner `khushiyant`, repo `kerf`, workflow `release.yml`, environment `pypi`. No token is stored
+   (OIDC). Then create a GitHub Actions *Environment* named `pypi`. (Fallback: skip trusted
+   publishing and instead set the `PYPI_API_TOKEN` secret and add
+   `password: ${{ secrets.PYPI_API_TOKEN }}` to the publish step.)
 3. That's it — `release.yml` already requests the right permissions (`id-token: write`,
    `contents: write`).
 

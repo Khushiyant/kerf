@@ -1,9 +1,6 @@
-//! Render deposited-material occupancy to PNG — the pixels behind Kerf's visual diff.
+//! Render deposited-material occupancy to PNG.
 //!
-//! [`render_diff_png`] colours each occupied cell by membership: grey = in both, red = only in A
-//! (added), blue = only in B (missing). [`diff_pngs_from_gcode`] parses two G-code files, denotes each
-//! layer, and produces one diff image per shared layer height — what the dashboard shows for
-//! "where do these two files differ?".
+//! Diff colours: grey = in both, red = only in A, blue = only in B.
 
 use std::collections::BTreeSet;
 
@@ -138,9 +135,9 @@ mod tests {
         let a: BTreeSet<Cell> = [(0, 0), (1, 0), (2, 0), (0, 1)].into_iter().collect();
         let b: BTreeSet<Cell> = [(0, 0), (1, 0)].into_iter().collect();
         let png = render_diff_png(&a, &b, 64);
-        assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n"); // PNG magic
+        assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
         let (w, h) = decode(&png);
-        assert_eq!((w, h), (3, 2)); // 3 wide, 2 tall — the union bbox
+        assert_eq!((w, h), (3, 2)); // union bbox
     }
 
     #[test]
@@ -155,7 +152,7 @@ mod tests {
         let a = "M83\n;LAYER_CHANGE\n;Z:0.2\n;TYPE:Perimeter\nG1 X10 Y0 E.4\nG1 X10 Y10 E.4\n;LAYER_CHANGE\n;Z:0.4\nG1 X10 Y0 E.4";
         let b = a.replace("X10 Y10", "X10 Y40"); // layer 0 differs
         let pngs = diff_pngs_from_gcode(a, &b, 200, 128);
-        assert_eq!(pngs.len(), 2); // two layer heights
+        assert_eq!(pngs.len(), 2);
         for (_, png) in &pngs {
             assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
         }

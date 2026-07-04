@@ -1,13 +1,8 @@
 //! JSON serialization boundary for the IR (feature `serde`).
 //!
-//! This is how Python — and any non-Rust consumer — builds, inspects, and diffs programs without a
-//! `#[pyclass]` wrapper per IR type. Adding an IR field never touches the bindings; it just appears in
-//! the JSON. Programs become plain text you can print, store in a `.kerf` file, or diff.
-//!
-//! Precision note: coordinates are `i64` microns encoded as JSON numbers. JSON integers above 2^53
-//! lose precision in some readers (JavaScript, and Python when a value round-trips through a float),
-//! but 2^53 µm ≈ 9 million km — any physical print is far inside the safe range. If astronomically
-//! large coordinates ever matter, switch to string-encoded integers here.
+//! Coordinates are `i64` microns encoded as JSON numbers. Integers above 2^53 lose precision in
+//! some readers (JavaScript, Python via float), but 2^53 µm is ~9 million km, far outside any
+//! physical print. Switch to string-encoded integers if that ever changes.
 
 use serde::de::DeserializeOwned;
 use serde::Serialize;

@@ -1,4 +1,4 @@
-//! Integration tests for the `kerf` binary — pins the exit-code contract of `kerf verify`
+//! Integration tests pinning the `kerf` exit-code contract
 //! (0 = sound, 1 = unsound, 2 = usage/read error, 3 = nothing to verify).
 
 use std::path::PathBuf;
@@ -35,6 +35,15 @@ fn no_geometry_exits_3() {
 }
 
 #[test]
+fn version_flag_prints_version_and_exits_0() {
+    let out = Command::new(KERF).arg("--version").output().unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    let s = String::from_utf8(out.stdout).unwrap();
+    assert!(s.starts_with("kerf "));
+    assert!(s.trim().ends_with(env!("CARGO_PKG_VERSION")));
+}
+
+#[test]
 fn missing_file_exits_2() {
     let code = Command::new(KERF)
         .args(["verify", "/no/such/file.gcode"])
@@ -64,8 +73,8 @@ fn batch_verify_exit_code_reflects_the_worst_file() {
     };
     let g = good.to_str().unwrap();
     let e = empty.to_str().unwrap();
-    assert_eq!(run(&[g, g]), Some(0)); // all sound
-    assert_eq!(run(&[g, e]), Some(1)); // one has no geometry -> batch fails
+    assert_eq!(run(&[g, g]), Some(0));
+    assert_eq!(run(&[g, e]), Some(1));
 }
 
 #[test]
@@ -86,6 +95,6 @@ fn diff_identical_exits_0_and_different_exits_1() {
             .status
             .code()
     };
-    assert_eq!(run(&a, &a), Some(0)); // identical to itself
-    assert_eq!(run(&a, &b), Some(1)); // different deposited material
+    assert_eq!(run(&a, &a), Some(0));
+    assert_eq!(run(&a, &b), Some(1));
 }

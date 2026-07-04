@@ -3,8 +3,8 @@ requires = ["maturin>=1.7,<2"]
 build-backend = "maturin"
 
 [project]
-name = "kerf"
-version = "1.0.0"
+name = "pykerf"
+version = "0.1.0"
 description = "Verify and diff 3D-printer G-code by the material it deposits — an open, checkable IR for the mesh-to-G-code half of the fabrication pipeline."
 readme = "README.md"
 license = { text = "MIT OR Apache-2.0" }
@@ -14,7 +14,7 @@ authors = [
 requires-python = ">=3.12"
 keywords = ["3d-printing", "gcode", "verification", "slicer", "fabrication"]
 classifiers = [
-    "Development Status :: 5 - Production/Stable",
+    "Development Status :: 4 - Beta",
     "License :: OSI Approved :: MIT License",
     "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Rust",
@@ -30,9 +30,7 @@ Repository = "https://github.com/khushiyant/kerf"
 Changelog = "https://github.com/khushiyant/kerf/blob/main/CHANGELOG.md"
 
 [tool.maturin]
-# The Rust core lives in a workspace; the thin PyO3 binding crate is kerf-py.
 manifest-path = "crates/kerf-py/Cargo.toml"
-# Python sources live under python/; the compiled module is placed at kerf/_kerf.
 python-source = "python"
-module-name = "kerf._kerf"
+module-name = "pykerf._kerf"
 features = ["pyo3/extension-module"]

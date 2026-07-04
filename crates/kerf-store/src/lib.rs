@@ -1,14 +1,11 @@
-//! Persistence for the Kerf platform, behind a single [`Store`] trait so the API and workers depend on
-//! one interface. This crate ships the in-memory implementation ([`MemStore`]) that makes the whole
-//! service runnable and testable today; the Postgres + object-store implementation (Phase 2) slots in
-//! behind the same trait without touching callers.
+//! Persistence behind a single [`Store`] trait. Ships an in-memory [`MemStore`]; a Postgres backend
+//! implements the same trait.
 //!
-//! Design invariants that hold regardless of backend:
-//!  - **Blobs are content-addressed** (SHA-256), so identical inputs are stored once.
-//!  - **Results are immutable** — [`Store::complete_job`] inserts a result and can never overwrite one;
-//!    completing an already-done job is an error.
-//!  - **Results form a per-tenant append-only chain** — each carries the previous result's digest, so
-//!    tampering with history is detectable (the auditability spine).
+//! Invariants that hold regardless of backend:
+//!  - Blobs are content-addressed (SHA-256): identical inputs are stored once.
+//!  - Results are immutable: completing an already-done job is an error.
+//!  - Results form a per-tenant append-only chain, each carrying the previous result's digest, so
+//!    tampering with history is detectable.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -47,8 +44,7 @@ pub enum JobSpec {
         a: BlobId,
         b: BlobId,
     },
-    /// Diff `input` against the registered baseline ("golden part") of a project, raising an alert if
-    /// the deposited material regressed.
+    /// Diff `input` against a project's registered baseline, raising an alert if deposited material regressed.
     Baseline {
         project: String,
         input: BlobId,
@@ -119,7 +115,7 @@ pub fn blob_id(bytes: &[u8]) -> BlobId {
     s
 }
 
-/// The persistence interface. Postgres/object-store (Phase 2) implements exactly this.
+/// The persistence interface.
 pub trait Store: Send + Sync {
     /// Store a blob content-addressed; returns its id (deduplicated).
     fn put_blob(&self, bytes: &[u8]) -> BlobId;
@@ -162,7 +158,7 @@ struct Inner {
     next_alert: u64,
 }
 
-/// In-memory [`Store`] — the Phase-1 backend; also the reference for the Postgres implementation.
+/// In-memory [`Store`] implementation.
 #[derive(Default)]
 pub struct MemStore {
     inner: Mutex<Inner>,
@@ -339,7 +335,7 @@ mod tests {
         let s = MemStore::new();
         let id1 = s.put_blob(GCODE.as_bytes());
         let id2 = s.put_blob(GCODE.as_bytes());
-        assert_eq!(id1, id2); // same content → same id
+        assert_eq!(id1, id2); // same content, same id
         assert_eq!(id1.len(), 64);
         assert_eq!(s.get_blob(&id1).as_deref(), Some(GCODE.as_bytes()));
         assert_ne!(id1, s.put_blob(b"different"));
@@ -367,7 +363,6 @@ mod tests {
         assert_eq!(done.status, JobStatus::Done);
         assert_eq!(done.result_id, Some(rid));
 
-        // Immutability: a completed job cannot be completed again.
         let err = s
             .complete_job(job, kerf_engine::verify(GCODE, 200))
             .unwrap_err();
@@ -393,7 +388,6 @@ mod tests {
         let s2 = s.get_result(r2).unwrap();
         assert_eq!(s1.chain_seq, 0);
         assert_eq!(s2.chain_seq, 1);
-        // The second result links to the first — a tamper-evident chain.
         assert_eq!(s2.prev_digest.as_deref(), Some(s1.result_digest.as_str()));
     }
 

@@ -1,8 +1,7 @@
-//! The high, geometric IR level: *what should be solid*.
+//! The high, geometric IR level: what should be solid.
 //!
-//! A program is a stack of layers; each layer is a set of filled [`Region`]s. There is no travel
-//! here — travel is a lowering artifact ([`crate::lower`]). The geometric oracle and geometric
-//! passes (seam, infill choice) reason about the filled areas at this level.
+//! A program is a stack of layers, each a set of filled [`Region`]s. No travel here — travel is a
+//! lowering artifact ([`crate::lower`]).
 
 use super::{Area, ExtrudePath, RegionKind};
 
@@ -24,8 +23,7 @@ pub struct Layer {
     pub regions: Vec<Region>,
 }
 
-/// A filled region: what should be solid (`boundary`), tagged by role, together with the extruding
-/// paths that realize it.
+/// A filled region: a `boundary` to be solid, tagged by role, plus the extruding paths that realize it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct Region {

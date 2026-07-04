@@ -1,6 +1,8 @@
 # Multi-stage build of the kerf-serve platform binary.
 FROM rust:1.90-slim AS build
 WORKDIR /src
+ARG KERF_GIT_SHA=unknown
+ENV KERF_GIT_SHA=$KERF_GIT_SHA
 COPY . .
 RUN cargo build --release -p kerf-api --bin kerf-serve --features postgres,otel
 

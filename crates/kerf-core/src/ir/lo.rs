@@ -1,15 +1,14 @@
-//! The low, move-plan IR level: *what the machine actually does*.
+//! The low, move-plan IR level: what the machine actually does.
 //!
-//! An ordered sequence of toolpaths per layer, including travel moves. This is what a backend lowers
-//! to G-code. Structurally this is CuraEngine's *lowered* level (`LayerPlan`/`GCodePath`).
+//! An ordered sequence of toolpaths per layer, including travel moves. A backend lowers this to G-code.
 
 use super::{Polyline, RegionKind};
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
-/// How a toolpath is traversed. Two axes are separated here: an extruding move carries a feature
-/// role ([`RegionKind`]); `Travel` is a low-level-only motion with no role and deposits no material.
+/// How a toolpath is traversed. An extruding move carries a feature role ([`RegionKind`]); `Travel`
+/// has no role and deposits no material.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub enum SegmentKind {

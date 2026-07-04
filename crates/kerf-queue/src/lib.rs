@@ -1,12 +1,9 @@
-//! A job queue behind a single [`Queue`] trait so workers and the API depend on one interface. This
-//! crate ships the in-memory [`MemQueue`] that makes the service runnable now; the Phase-2 Postgres
-//! implementation (a `SELECT … FOR UPDATE SKIP LOCKED` lease loop) slots in behind the same trait.
+//! A job queue behind a single [`Queue`] trait, with an in-memory [`MemQueue`] implementation.
 //!
 //! Semantics that hold regardless of backend:
-//!  - **Lease, don't dequeue.** [`Queue::lease`] hands a job to a worker but keeps ownership until it is
-//!    [`ack`](Queue::ack)ed, so a crashed worker's job is not lost.
-//!  - **Bounded retries with a dead-letter.** [`Queue::nack`] requeues a job until `max_attempts`, after
-//!    which it moves to the dead-letter list instead of retrying forever.
+//!  - Lease, don't dequeue: [`Queue::lease`] keeps ownership until [`ack`](Queue::ack), so a crashed
+//!    worker's job is not lost.
+//!  - [`Queue::nack`] requeues a job until `max_attempts`, then dead-letters it.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Mutex;
@@ -14,8 +11,7 @@ use std::sync::Mutex;
 /// Opaque job identifier (matches `kerf-store`'s `JobId`).
 pub type JobId = u64;
 
-/// Outcome of a [`Queue::nack`]: either the job was requeued for another attempt, or it exhausted its
-/// retries and was dead-lettered.
+/// Outcome of a [`Queue::nack`]: requeued for another attempt, or dead-lettered.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Nacked {
     Requeued { attempt: u32 },
@@ -26,8 +22,8 @@ pub enum Nacked {
 pub trait Queue: Send + Sync {
     /// Add a job to the back of the queue.
     fn enqueue(&self, job: JobId);
-    /// Lease up to `max` queued jobs to a worker (removes them from the pending queue, but the queue
-    /// retains ownership until `ack`/`nack`). Increments each job's attempt counter.
+    /// Lease up to `max` queued jobs; the queue retains ownership until `ack`/`nack`. Increments each
+    /// job's attempt counter.
     fn lease(&self, max: usize) -> Vec<JobId>;
     /// Mark a leased job successfully done (drops it entirely).
     fn ack(&self, job: JobId);
@@ -47,7 +43,7 @@ struct Inner {
     dead: Vec<JobId>,
 }
 
-/// In-memory [`Queue`] — the Phase-1 backend and the reference for the Postgres implementation.
+/// In-memory [`Queue`].
 pub struct MemQueue {
     inner: Mutex<Inner>,
     max_attempts: u32,

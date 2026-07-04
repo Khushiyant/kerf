@@ -1,5 +1,4 @@
-//! `kerf-serve` — a single binary running the API and a background worker over the in-memory backends.
-//! The demoable Phase-1 spine: `POST /v1/verify`, the worker processes it, `GET /v1/results/{id}`.
+//! `kerf-serve`: a single binary running the API and a background worker.
 //!
 //! Config via env: `KERF_ADDR` (default `0.0.0.0:8080`), `KERF_API_KEY` (default `dev-key`),
 //! `KERF_TENANT` (default `default`).
@@ -20,7 +19,7 @@ async fn main() {
     let key = std::env::var("KERF_API_KEY").unwrap_or_else(|_| "dev-key".to_string());
     let tenant = std::env::var("KERF_TENANT").unwrap_or_else(|_| "default".to_string());
     let mut key_map = HashMap::from([(key.clone(), (tenant.clone(), Role::Writer))]);
-    // Optional read-only key (RBAC): KERF_READER_KEY may read but not submit.
+    // KERF_READER_KEY, if set, may read but not submit.
     if let Ok(ro) = std::env::var("KERF_READER_KEY") {
         if !ro.is_empty() {
             key_map.insert(ro, (tenant.clone(), Role::Reader));
@@ -35,7 +34,6 @@ async fn main() {
         metrics: Arc::new(Metrics::default()),
     };
 
-    // Background worker loop, stopped on shutdown.
     let (tx, rx) = tokio::sync::watch::channel(false);
     let worker = tokio::spawn(kerf_worker::run(store, queue, rx));
 
@@ -48,7 +46,7 @@ async fn main() {
     axum::serve(listener, build_router(state))
         .with_graceful_shutdown(async move {
             let _ = tokio::signal::ctrl_c().await;
-            let _ = tx.send(true); // stop the worker too
+            let _ = tx.send(true);
         })
         .await
         .expect("server error");
@@ -57,7 +55,7 @@ async fn main() {
     shutdown_telemetry();
 }
 
-/// Pick the backend: durable Postgres when `DATABASE_URL` is set (and built with `--features postgres`),
+/// Pick the backend: Postgres when `DATABASE_URL` is set and built with `--features postgres`,
 /// otherwise the in-memory store.
 fn select_store() -> Arc<dyn Store> {
     match std::env::var("DATABASE_URL") {

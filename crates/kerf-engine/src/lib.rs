@@ -1,17 +1,6 @@
-//! Deterministic, versioned wrapper over `kerf-core` — the ONE place the service touches the engine.
-//!
-//! Workers and the API never call `kerf_core::verify_gcode` / `diff_gcode` directly; they call
-//! [`verify`] / [`diff`] here, which return a self-describing [`VerdictEnvelope`]:
-//!
-//!  - the exact `kerf-core` result as `raw` JSON (nothing is lost or reinterpreted),
-//!  - a small [`VerdictSummary`] for cheap display/filtering without re-parsing `raw`,
-//!  - the SHA-256 of every input and the [`EngineVersion`] (crate semver + build git SHA),
-//!  - a [`VerdictEnvelope::result_digest`] over `{engine, kind, inputs, resolution_um, raw}`.
-//!
-//! Because `kerf-core`'s occupancy is a deterministic, rayon-order-independent function of the program,
-//! the same build re-running the same pinned inputs yields a **bit-identical** `result_digest` — the
-//! foundation of the platform's replay/reproducibility guarantee. This module does no I/O and is not
-//! async; all timing/randomness stays out of the digest.
+//! Deterministic, versioned wrapper over `kerf-core`. Callers use [`verify`] / [`diff`], which return
+//! a self-describing [`VerdictEnvelope`] whose [`VerdictEnvelope::result_digest`] is bit-identical
+//! across runs of the same build on the same inputs. No I/O; timing and randomness stay out of the digest.
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -28,7 +17,6 @@ impl EngineVersion {
     /// The version of the currently-running build.
     pub fn current() -> Self {
         Self {
-            // kerf-engine shares the workspace version with kerf-core, so this is the core semver.
             core_semver: env!("CARGO_PKG_VERSION").to_string(),
             git_sha: env!("KERF_GIT_SHA").to_string(),
         }
@@ -56,8 +44,8 @@ pub struct InputRef {
 /// A flat, display-friendly digest of the outcome. Derived from `raw`; not part of `result_digest`.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Default)]
 pub struct VerdictSummary {
-    /// The headline pass/fail: verify → SOUND; diff → identical (only when not `both_empty`). `None`
-    /// when there is nothing to assert (no geometry / both files empty).
+    /// Headline pass/fail: verify → sound; diff → identical (only when not `both_empty`). `None` when
+    /// there is nothing to assert (no geometry / both files empty).
     pub ok: Option<bool>,
     pub has_geometry: Option<bool>,
     pub identical: Option<bool>,
@@ -73,14 +61,14 @@ pub struct VerdictEnvelope {
     pub kind: VerdictKind,
     pub inputs: Vec<InputRef>,
     pub resolution_um: i64,
-    /// The exact `kerf-core` `GcodeVerification` / `GcodeDiff` as JSON — the source of truth.
+    /// The exact `kerf-core` `GcodeVerification` / `GcodeDiff` as JSON.
     pub raw: serde_json::Value,
     pub summary: VerdictSummary,
-    /// Wall time spent in the engine. Observability only — deliberately excluded from `result_digest`.
+    /// Wall time spent in the engine. Excluded from `result_digest`.
     pub engine_wall_ms: u64,
 }
 
-/// The subset of an envelope that defines its identity — everything reproducible, nothing timing-based.
+/// The subset of an envelope that defines its identity: reproducible content only, no timing.
 #[derive(Serialize)]
 struct DigestInput<'a> {
     engine: &'a EngineVersion,
@@ -91,9 +79,8 @@ struct DigestInput<'a> {
 }
 
 impl VerdictEnvelope {
-    /// Stable SHA-256 over the reproducible content. Two runs of the same build on the same inputs
-    /// produce the same digest; `engine_wall_ms` and `summary` (derived) are excluded. `serde_json`
-    /// objects use sorted keys by default, so the serialization is canonical.
+    /// Stable SHA-256 over the reproducible content; `engine_wall_ms` and the derived `summary` are
+    /// excluded. `serde_json` sorts object keys, so the serialization is canonical.
     pub fn result_digest(&self) -> String {
         let d = DigestInput {
             engine: &self.engine,
@@ -145,7 +132,7 @@ pub fn verify(gcode: &str, resolution_um: i64) -> VerdictEnvelope {
 }
 
 /// Diff two G-code files by deposited material; returns a reproducible envelope over
-/// `kerf_core::diff_gcode`. `summary.ok` is the *meaningful* identical verdict (`None` when both empty).
+/// `kerf_core::diff_gcode`. `summary.ok` is the meaningful identical verdict (`None` when both empty).
 pub fn diff(a: &str, b: &str, resolution_um: i64) -> VerdictEnvelope {
     let t = Instant::now();
     let d = kerf_core::diff_gcode(a, b, resolution_um);
@@ -172,7 +159,6 @@ pub fn diff(a: &str, b: &str, resolution_um: i64) -> VerdictEnvelope {
 mod tests {
     use super::*;
 
-    // A tiny two-layer extruding program so verify has real geometry to check.
     const GCODE: &str = "M83\nG21\n;LAYER_CHANGE\n;Z:0.2\n;TYPE:External perimeter\n;WIDTH:0.45\nG0 X0 Y0\nG1 X10 Y0 E.4\nG1 X10 Y10 E.4\n;LAYER_CHANGE\n;Z:0.4\n;TYPE:External perimeter\nG0 X0 Y0\nG1 X10 Y0 E.4";
 
     #[test]
@@ -183,14 +169,13 @@ mod tests {
         assert_eq!(e.inputs[0].sha256.len(), 64);
         assert_eq!(e.inputs[0].bytes, GCODE.len());
         assert_eq!(e.summary.has_geometry, Some(true));
-        assert_eq!(e.summary.ok, Some(true)); // this program survives Kerf's transforms
+        assert_eq!(e.summary.ok, Some(true));
         assert!(e.raw.get("pass_preserves_denotation").is_some());
         assert_eq!(e.engine.core_semver, env!("CARGO_PKG_VERSION"));
     }
 
     #[test]
     fn result_digest_is_deterministic_and_input_sensitive() {
-        // Same build + same inputs → identical digest (the replay/reproducibility guarantee).
         assert_eq!(
             verify(GCODE, 200).result_digest(),
             verify(GCODE, 200).result_digest()
@@ -200,7 +185,6 @@ mod tests {
             verify(GCODE, 200).result_digest(),
             verify(GCODE, 100).result_digest()
         );
-        // A different input changes the digest.
         let other = GCODE.replace("X10 Y10", "X10 Y20");
         assert_ne!(
             verify(GCODE, 200).result_digest(),
@@ -223,7 +207,7 @@ mod tests {
     fn diff_of_empty_files_is_not_a_meaningful_match() {
         let e = diff("", "", 200);
         assert_eq!(e.summary.both_empty, Some(true));
-        assert_eq!(e.summary.ok, None); // identical-but-empty is NOT a "same part" verdict
+        assert_eq!(e.summary.ok, None); // identical-but-empty is not a "same part" verdict
     }
 
     #[test]

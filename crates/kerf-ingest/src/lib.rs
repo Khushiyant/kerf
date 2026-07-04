@@ -1,6 +1,5 @@
-//! Watch-folder ingest for print farms: point an [`Ingester`] at a directory and each new `*.gcode`
-//! file is content-addressed into the store and enqueued as a verify job. Idempotent — a file already
-//! seen is not resubmitted — so [`Ingester::scan`] can be called on a timer.
+//! Watch-folder ingest: each new `*.gcode` file is content-addressed into the store and enqueued as a
+//! verify job. Idempotent (a file already seen is not resubmitted), so scans can run on a timer.
 
 use std::collections::HashSet;
 use std::fs;
@@ -83,12 +82,9 @@ mod tests {
         let queue = MemQueue::default();
         let mut ing = Ingester::new(&dir, "acme", 200);
 
-        // First scan: only the .gcode file is submitted.
         assert_eq!(ing.scan(&store, &queue).len(), 1);
         assert_eq!(queue.pending(), 1);
-        // Re-scan: nothing new.
         assert_eq!(ing.scan(&store, &queue).len(), 0);
-        // A new file appears.
         fs::write(dir.join("b.gcode"), GCODE).unwrap();
         let third = ing.scan(&store, &queue);
         assert_eq!(third.len(), 1);

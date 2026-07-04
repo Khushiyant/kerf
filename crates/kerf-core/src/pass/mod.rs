@@ -1,14 +1,7 @@
-//! Pass policy (see `docs/06-architecture.md`).
+//! Pass policy: a pass is a pure transform of the low-level move plan (value-in, value-out).
 //!
-//! A pass is a *pure* transform of the low-level move plan: value-in, value-out. This signature
-//! admits mutable implementations today AND leaves the door open to wrapping the IR in an e-graph
-//! later; a `&mut` signature would bake destructive rewrite into the contract and fight equality
-//! saturation, forcing a later trait break.
-//!
-//! Every pass carries a proof obligation: it MUST preserve denotation
-//! (`denote_lo(p) == denote_lo(run(p))`). [`preserves_denotation`] checks that obligation with the
-//! oracle. There is deliberately no e-graph, interning, or operator enum yet — those wait for a
-//! rewrite-rule catalog and a cost function worth saturating over.
+//! Every pass MUST preserve denotation (`denote_lo(p) == denote_lo(run(p))`);
+//! [`preserves_denotation`] checks that obligation with the oracle.
 
 pub mod travel_order;
 
@@ -25,16 +18,12 @@ pub trait Pass {
     fn run(&self, program: lo::Program) -> lo::Program;
 }
 
-/// The oracle for passes: does `pass` preserve the program's denotation at this resolution?
-///
-/// This is what makes a pass trustworthy. GlitchFinder cannot state this about its transforms
-/// because it has none — it only probes finished slicer output. Here the transform is ours, so its
-/// soundness is directly checkable.
+/// Does `pass` preserve the program's denotation at this resolution?
 pub fn preserves_denotation<P: Pass>(pass: &P, program: &lo::Program, resolution_um: i64) -> bool {
     denote_lo(program, resolution_um) == denote_lo(&pass.run(program.clone()), resolution_um)
 }
 
-/// The trivial identity pass — proves the trait shape and is trivially denotation-preserving.
+/// The identity pass; trivially denotation-preserving.
 pub struct Identity;
 
 impl Pass for Identity {
@@ -70,8 +59,7 @@ mod tests {
         assert!(preserves_denotation(&Identity, &one_segment_program(), 200));
     }
 
-    /// A deliberately broken pass that drops the first extruding move. The oracle MUST reject it —
-    /// this proves the check is not vacuous (it has teeth).
+    /// A broken pass that drops the first extruding move; the oracle MUST reject it.
     struct DropFirstExtrude;
     impl Pass for DropFirstExtrude {
         fn name(&self) -> &str {
@@ -89,7 +77,7 @@ mod tests {
 
     #[test]
     fn oracle_catches_a_pass_that_drops_material() {
-        // Two disjoint segments so removing one provably changes the deposited material.
+        // Two disjoint segments so removing one changes the deposited material.
         let prog = lo::Program {
             layers: vec![Layer {
                 z_um: 200,

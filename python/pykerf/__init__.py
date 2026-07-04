@@ -1,11 +1,6 @@
-"""Kerf — an LLVM for slicing.
+"""pykerf — a Python surface over the Kerf Rust core (``pykerf._kerf``).
 
-A thin Python surface over the Rust core (compiled as ``kerf._kerf``). The IR, lowering, backends,
-passes, and the correctness oracle all live in Rust (``crates/kerf-core``); this package re-exports a
-clean API. The IR crosses the boundary as JSON (see ``demo_square_json`` for the shape), so you can
-build, inspect, and verify arbitrary programs from Python.
-
-See ``docs/`` for the research and design record, starting with ``docs/00-thesis.md``.
+The IR crosses the boundary as JSON (see ``demo_square_json`` for the shape).
 """
 
 from ._kerf import (

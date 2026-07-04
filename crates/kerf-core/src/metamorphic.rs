@@ -1,11 +1,5 @@
-//! Metamorphic verification relations over the IR — properties a correct denotation must satisfy
-//! under geometric transforms of the input.
-//!
-//! GlitchFinder (OOPSLA 2025) pioneered rotation-invariance as a *black-box* oracle over finished
-//! slicer output. Kerf's relations run over its own IR — built directly or parsed from real slicer
-//! G-code ([`crate::frontend`]) — so they compose with the lowering/pass soundness oracle
-//! ([`crate::pass::preserves_denotation`], [`crate::denote::self_lowering_sound`]) that a black-box
-//! tester cannot express. This module adds the second relation: translation-invariance.
+//! Metamorphic verification relations over the IR: properties a correct denotation must satisfy
+//! under geometric transforms of the input. This module provides translation-invariance.
 
 use std::collections::BTreeSet;
 
@@ -41,14 +35,10 @@ pub fn translate(program: &lo::Program, dx: i64, dy: i64) -> lo::Program {
 }
 
 /// Translation-invariance: translating the program by an exact whole number of raster cells must
-/// shift the occupancy by exactly that many cells and change nothing else. This checks that `denote`
-/// handles coordinates shift-consistently (it operates on an already-built `lo::Program`, so it
-/// exercises `denote`/geometry, not the parser).
+/// shift the occupancy by exactly that many cells and change nothing else.
 ///
-/// The translation is by whole cells (`cells_* * resolution`) on purpose: a non-cell-multiple shift
-/// aliases the grid and is not a clean relation (see `denote`'s resolution caveat). For whole-cell
-/// shifts the property is exact — the coverage decision is bit-identical because it depends only on
-/// the (unchanged) relative offset between a cell centre and a segment.
+/// Translation is by whole cells (`cells_* * resolution`): a non-cell-multiple shift aliases the
+/// grid and is not a clean relation. For whole-cell shifts the property is exact.
 pub fn translation_invariant(
     program: &lo::Program,
     cells_x: i64,
@@ -136,8 +126,7 @@ mod proptests {
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(48))]
 
-        // Any program is translation-invariant under a whole-cell shift — the metamorphic relation
-        // that catches coordinate mishandling in denote (and, via parsed programs, in the frontend).
+        // Any program is translation-invariant under a whole-cell shift.
         #[test]
         fn any_program_is_translation_invariant(
             prog in arb_program(),

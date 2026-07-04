@@ -1,10 +1,8 @@
-//! The Kerf worker: the loop that turns queued jobs into stored verdicts.
+//! The worker loop that turns queued jobs into stored verdicts.
 //!
-//! [`process_one`] is the pure step — lease a job, load its blobs, run `kerf-engine`, store the
-//! immutable result, and `ack`/`nack` the queue. [`run`] drives it asynchronously off the reactor
-//! (the ~seconds-long CPU verify runs in `spawn_blocking`) until a shutdown signal. Everything is
-//! expressed against the `Store` / `Queue` traits, so the same worker runs over the in-memory backends
-//! today and Postgres/object-store in Phase 2.
+//! [`process_one`] is the pure step: lease a job, load its blobs, run `kerf-engine`, store the result,
+//! and `ack`/`nack`. [`run`] drives it asynchronously, running the CPU-bound engine call in
+//! `spawn_blocking` until a shutdown signal.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -23,8 +21,7 @@ pub enum Outcome {
     Failed { job: JobId },
 }
 
-/// Lease at most one job and process it to completion. Synchronous and self-contained: this is the unit
-/// of work, testable without a runtime.
+/// Lease at most one job and process it to completion. Synchronous and self-contained.
 pub fn process_one(store: &dyn Store, queue: &dyn Queue) -> Outcome {
     let Some(job_id) = queue.lease(1).into_iter().next() else {
         return Outcome::Idle;
@@ -73,8 +70,7 @@ pub fn process_one(store: &dyn Store, queue: &dyn Queue) -> Outcome {
         }
     };
 
-    // For a baseline check, decide regression (material differs from the golden part) before the
-    // envelope is moved into the store.
+    // For a baseline check, decide regression before the envelope is moved into the store.
     let regression = if let JobSpec::Baseline { project, .. } = &job.spec {
         let identical = envelope.summary.identical.unwrap_or(true);
         let both_empty = envelope.summary.both_empty.unwrap_or(false);
@@ -109,7 +105,7 @@ pub fn process_one(store: &dyn Store, queue: &dyn Queue) -> Outcome {
 }
 
 /// Run the worker loop until `shutdown` flips to `true`. The CPU-bound engine call runs on the blocking
-/// pool so it never stalls the async reactor; an empty queue backs off briefly.
+/// pool; an empty queue backs off briefly.
 pub async fn run(
     store: Arc<dyn Store>,
     queue: Arc<dyn Queue>,

@@ -1,9 +1,7 @@
-//! Differential comparison of two G-code files by *what they physically deposit*.
+//! Differential comparison of two G-code files by what they physically deposit.
 //!
-//! Parse both files into the IR, `denote` each to per-layer material occupancy, and compare —
-//! matched by layer height (Z), not by line order. This answers a question a professional actually
-//! asks — "do these two slicer versions / settings produce the same part?" — in terms of deposited
-//! material, up to the raster resolution, rather than a meaningless text diff of the G-code.
+//! Both files are parsed and denoted to per-layer material occupancy, then compared matched by
+//! layer height (Z), not by line order, up to the raster resolution.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -29,12 +27,10 @@ pub struct LayerDiff {
 #[cfg_attr(feature = "serde", derive(Serialize))]
 pub struct GcodeDiff {
     pub resolution_um: i64,
-    /// True iff the two files deposit exactly the same material at every layer (up to resolution).
-    /// NB: this is trivially true when both files are empty — check [`GcodeDiff::both_empty`] before
-    /// treating `identical` as a meaningful "same part" verdict.
+    /// True iff the two files deposit the same material at every layer (up to resolution). Trivially
+    /// true when both files are empty; check [`GcodeDiff::both_empty`] first.
     pub identical: bool,
-    /// True iff *neither* file yielded any deposited material (nothing to compare). A verdict of
-    /// `identical` is only meaningful when this is false.
+    /// True iff neither file yielded deposited material. `identical` is only meaningful when false.
     pub both_empty: bool,
     pub total_only_in_a: usize,
     pub total_only_in_b: usize,
@@ -117,8 +113,6 @@ mod tests {
 
     #[test]
     fn two_empty_files_are_flagged_both_empty_not_a_real_match() {
-        // Neither file yields geometry; `identical` is trivially true, but `both_empty` marks it as
-        // "nothing to compare" so a caller never reads a green "same part" verdict.
         let d = diff_gcode("M104 S200\nG28\n", ";just comments\n", 200);
         assert!(d.both_empty);
         assert_eq!(d.iou(), None);
@@ -126,7 +120,6 @@ mod tests {
 
     #[test]
     fn a_shifted_copy_differs() {
-        // Same shape moved 5 mm over: mostly disjoint material.
         let b = "M83\nG21\n;LAYER_CHANGE\n;Z:0.2\n;TYPE:Perimeter\n;WIDTH:0.45\nG1 X5 Y50 E.1\nG1 X25 Y50 E.5\nG1 X25 Y70 E.5";
         let d = diff_gcode(A, b, 200);
         assert!(!d.identical);

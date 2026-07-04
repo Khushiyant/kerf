@@ -5,8 +5,8 @@
 *.so
 *.pyd
 *.dylib
-/python/kerf/_kerf*.so
-/python/kerf/_kerf*.pyd
+/python/pykerf/_kerf*.so
+/python/pykerf/_kerf*.pyd
 
 # Python-generated files
 __pycache__/

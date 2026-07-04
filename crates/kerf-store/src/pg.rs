@@ -1,15 +1,11 @@
-//! Postgres-backed [`Store`] (feature `postgres`) — the durable backend behind the same trait the
-//! in-memory [`MemStore`](crate::MemStore) implements, so nothing else in the platform changes.
+//! Postgres-backed [`Store`] (feature `postgres`).
 //!
 //! The synchronous `postgres` client runs its own internal runtime, which cannot be driven from inside
-//! the server's Tokio runtime ("cannot start a runtime from within a runtime"). So the client lives on a
-//! dedicated OS thread and every [`Store`] call is dispatched to it over a channel and awaited on a
-//! reply channel. This keeps the `Store` trait synchronous and works uniformly from async handlers and
-//! from the worker's blocking threads.
+//! Tokio ("cannot start a runtime from within a runtime"). The client lives on a dedicated OS thread and
+//! every [`Store`] call is dispatched to it over a channel and awaited on a reply channel.
 //!
-//! Results are immutable in app logic (re-completing errors) AND at the database level (a trigger
-//! rejects UPDATE/DELETE on `results`), and are linked into a per-tenant hash chain — the auditability
-//! spine.
+//! Results are immutable both in app logic and at the database level (a trigger rejects UPDATE/DELETE on
+//! `results`), and are linked into a per-tenant hash chain.
 
 use std::sync::mpsc::{channel, Sender};
 use std::thread;
@@ -70,7 +66,7 @@ CREATE TRIGGER kerf_results_no_mutate BEFORE UPDATE OR DELETE ON results
 
 type Task = Box<dyn FnOnce(&mut Client) + Send>;
 
-/// A durable Postgres-backed store. Holds a handle to a dedicated DB thread.
+/// A durable Postgres-backed store.
 pub struct PgStore {
     tx: Sender<Task>,
 }

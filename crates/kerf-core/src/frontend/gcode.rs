@@ -1,34 +1,18 @@
-//! A robust, never-panic G-code -> [`crate::ir::lo`] parser for real FDM slicer output.
+//! Never-panic G-code -> [`crate::ir::lo`] parser for FDM slicer output.
 //!
-//! Implements the verified spec (see `docs/06-architecture.md`). Key rules:
+//! Key rules:
+//!  - Extrude vs. travel is decided by E-delta, not the G0/G1 opcode. Absolute (M82, default) vs.
+//!    relative (M83) E is tracked; `G92 E` resets the baseline. The decision is made on the rounded
+//!    micron displacement, so a sub-micron move never produces a degenerate zero-length segment.
+//!  - Layers open only on a marker or the first extrusion. Layer Z is the `;Z:` / `; Z_HEIGHT:` value
+//!    if present, else the triggering extrusion's Z — never a Z reached only by a travel hop.
+//!  - Geometry (XY, Z, extrude/travel) is trusted; role and width are untrusted re-inference. Role
+//!    resets at every layer boundary; any fallback to `Perimeter` is recorded in [`Diagnostics`].
+//!  - A skipped move (overflow, G91) changes no state, including the E baseline.
+//!  - Arcs (G2/G3) are flattened to chord polylines within ~20 µm deviation.
 //!
-//!  - **Extrude vs. travel by E-delta, never the G0/G1 opcode** (RepRap/Marlin alias them). Absolute
-//!    (M82, the default) vs. relative (M83) E is tracked; `G92 E` resets the baseline. The
-//!    extrude/travel/zero-length decision is made on the *rounded micron* displacement, so a
-//!    sub-micron move never produces a degenerate zero-length segment or an absurd width.
-//!  - **Layers are opened only by markers** (Cura `;LAYER:`, PrusaSlicer/Orca `;LAYER_CHANGE` and the
-//!    `;BEFORE_LAYER_CHANGE` / `;AFTER_LAYER_CHANGE` hooks, Bambu `; CHANGE_LAYER`, Simplify3D
-//!    `; layer N, Z = <mm>`) or the first extrusion. The layer Z is the `;Z:` / `; Z_HEIGHT:` value when present, else the Z of the
-//!    triggering extrusion — *never* a Z reached only by a travel hop, so Z-hops never create a
-//!    spurious layer or misfile geometry at the hop height.
-//!  - **Trust boundary.** Geometry (XY polyline, Z, extrude/travel) is TRUSTED. Feature ROLE
-//!    (`;TYPE:` / `; FEATURE:`) and WIDTH (`;WIDTH:` / `; LINE_WIDTH:`) are UNTRUSTED re-inference:
-//!    role is reset at every layer boundary, and any extruding move that falls back to `Perimeter`
-//!    (unknown/unmapped/absent role) is recorded in [`Diagnostics`] — never silently trusted.
-//!  - A skipped move (overflow, G91) changes no state — including the E baseline — so it can never
-//!    corrupt the geometry of a later move.
-//!  - **Arcs (G2/G3)** are flattened to chord polylines (I/J centre and R radius forms) within a
-//!    ~20 µm deviation, so arc-fitted / ArcWelder output is captured, not skipped.
-//!
-//! # Known limitations (by design, not bugs)
-//!
-//!  - **Planar only.** The IR is 2D-per-layer; vase-mode / continuously-ramped Z prints are recovered
-//!    as many thin layers or conflated — fundamentally lossy. Out of scope (see `docs/05-direction.md`).
-//!  - **Deposited-only.** Pre-extrusion approach travel is elided and travel-only layers are dropped,
-//!    so `Diagnostics` travel counts and any travel distance are a deposited-path lower bound.
-//!  - **Degenerate input.** An extrusion before any Z is established is filed at z=0 (spec: modal Z
-//!    defaults to 0); a `*checksum` embedded inside a `;TYPE:` value leaks into the (untrusted,
-//!    diagnostic-only) role string. Both require malformed input no real slicer emits.
+//! Planar only: vase-mode / continuously-ramped Z is lossy. Deposited-only: approach travel is
+//! elided and travel-only layers are dropped, so travel counts are a lower bound.
 
 use std::collections::BTreeSet;
 
@@ -43,8 +27,7 @@ const NOMINAL_WIDTH_UM: i64 = 400;
 /// Cross-section of 1.75 mm filament, mm² — the default for linear-E width back-computation.
 const DEFAULT_FILAMENT_AREA_MM2: f64 = std::f64::consts::PI * (1.75 / 2.0) * (1.75 / 2.0);
 
-/// Side-channel diagnostics from a parse: what was recovered, guessed, or dropped. This is where the
-/// untrusted-inference gaps are surfaced so a verifier can distinguish trusted geometry from guesses.
+/// Side-channel diagnostics from a parse: what was recovered, guessed, or dropped.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(Serialize))]
 pub struct Diagnostics {
@@ -54,7 +37,7 @@ pub struct Diagnostics {
     pub travel_toolpaths: usize,
     /// Distinct `;TYPE:` / `; FEATURE:` values (and `<no ;TYPE:>`) that fell back to `Perimeter`.
     pub unknown_roles: BTreeSet<String>,
-    /// Count of extruding moves that used a guessed (fallback) role — the volume behind `unknown_roles`.
+    /// Count of extruding moves that used a guessed (fallback) role.
     pub fallback_role_moves: usize,
     /// Extruding moves whose width was estimated (formula) or nominal, not read from a width comment.
     pub estimated_width_moves: usize,
@@ -190,13 +173,12 @@ impl Parser {
         {
             self.set_role(v.trim());
         } else if is_layer_marker(com) {
-            // A layer boundary flushes the layer AND clears the role, so an untyped extrude on the new
-            // layer is a recorded fallback rather than a silent inherit of the previous layer's role.
+            // A layer boundary clears the role so an untyped extrude on the new layer is a recorded
+            // fallback, not a silent inherit of the previous layer's role.
             self.force_new_layer = true;
             self.cur_role = None;
             self.cur_role_known = false;
             self.cur_role_raw = None;
-            // Simplify3D encodes the layer height inline, e.g. "; layer 1, Z = 0.18".
             if let Some(mm) = inline_z_mm(com) {
                 self.z = mm;
                 self.pending_layer_z_um = mm_to_um(mm);
@@ -226,7 +208,7 @@ impl Parser {
             if let Some(mm) = parse_mm(v) {
                 if let Some(w) = mm_to_um(mm) {
                     // A non-positive width comment is malformed; ignore it so extruding toolpaths
-                    // always carry a positive width (falls through to the formula/nominal).
+                    // always carry a positive width.
                     if w > 0 && Some(w) != self.width_um {
                         self.width_um = Some(w);
                         self.width_epoch += 1;
@@ -234,10 +216,8 @@ impl Parser {
                 }
             }
         } else if let Some(mapped) = bare_role(com) {
-            // Prefix-less feature comments: Simplify3D ("; outer perimeter"), verbose Slic3r
-            // ("; perimeter"), KISSlicer ("; 'Perimeter Path', ..."). For the KISSlicer quoted form,
-            // record just the role name — not the trailing feed/head rates, which would otherwise make
-            // every wipe move a distinct "unknown role" in diagnostics.
+            // For the KISSlicer quoted form, record just the role name, not the trailing feed/head
+            // rates that would otherwise make every wipe move a distinct unknown role.
             let raw = com
                 .strip_prefix("; '")
                 .and_then(|r| r.split('\'').next())
@@ -302,8 +282,8 @@ impl Parser {
         let f = self.fields(words);
         match (cl, n) {
             ('G', 0) | ('G', 1) => self.do_move(&f),
-            ('G', 2) => self.do_arc(&f, false), // clockwise
-            ('G', 3) => self.do_arc(&f, true),  // counter-clockwise
+            ('G', 2) => self.do_arc(&f, false),
+            ('G', 3) => self.do_arc(&f, true),
             ('G', 92) => {
                 if let Some(e) = f.e {
                     self.e_prev = e;
@@ -380,7 +360,7 @@ impl Parser {
         }
     }
 
-    /// Handle a G2 (clockwise) / G3 (counter-clockwise) arc by flattening it to chord segments.
+    /// Handle a G2 (CW) / G3 (CCW) arc by flattening it to chord segments.
     fn do_arc(&mut self, f: &Fields, ccw: bool) {
         if self.relative_xyz {
             self.diag.skipped_g91_moves += 1;
@@ -406,8 +386,7 @@ impl Parser {
 
         // Arc centre, in microns. I/J are offsets from the current point; R computes the centre.
         let center = match (f.i, f.j, f.r) {
-            // I/J centre form: either offset present, the other defaults to 0 (a missing offset is
-            // legal — e.g. `G2 X20 I10` is a valid semicircle with J=0).
+            // Either offset present; a missing offset defaults to 0.
             (i, j, _) if i.is_some() || j.is_some() => Some((
                 px as f64 + i.unwrap_or(0.0) * 1000.0,
                 py as f64 + j.unwrap_or(0.0) * 1000.0,
@@ -417,11 +396,11 @@ impl Parser {
         };
         let chords = match center {
             Some((cx, cy)) => flatten_arc(prev, target, cx, cy, ccw, ARC_TOL_UM),
-            None => vec![target], // no centre info: fall back to a straight chord to the target
+            None => vec![target], // no centre info: straight chord to the target
         };
         self.diag.arcs_flattened += 1;
 
-        // Drop points that do not advance (degenerate/duplicate), so no zero-length segment is emitted.
+        // Drop points that do not advance, so no zero-length segment is emitted.
         let mut run: Vec<Point> = Vec::new();
         let mut last = prev;
         for p in chords {
@@ -469,8 +448,8 @@ impl Parser {
         if !(nx.is_finite() && ny.is_finite() && nz.is_finite()) {
             return;
         }
-        // Overflow guards BEFORE consuming E: a skipped move must not perturb the E baseline (SF-1),
-        // and the previous position must be representable, not a phantom origin (RE-4).
+        // Overflow guards must precede consuming E: a skipped move must not perturb the E baseline,
+        // and the previous position must be representable, not a phantom origin.
         let (Some(px), Some(py)) = (mm_to_um(self.x), mm_to_um(self.y)) else {
             self.diag.overflow_skips += 1;
             return;
@@ -526,9 +505,8 @@ impl Parser {
         NOMINAL_WIDTH_UM
     }
 
-    /// Open a new layer only on a marker or the first extrusion; otherwise continue the current layer
-    /// (so a travel Z-hop never opens a spurious layer). The layer Z is the trusted `;Z:` value or the
-    /// extruding move's own Z — never a Z reached only by travel.
+    /// Open a new layer only on a marker or the first extrusion, so a travel Z-hop never opens a
+    /// spurious layer. Layer Z is the `;Z:` value or the extruding move's Z, never a travel-reached Z.
     fn open_layer(&mut self, extrude_z_mm: f64) {
         if self.open.is_none() || self.force_new_layer {
             self.flush_layer();
@@ -555,8 +533,8 @@ impl Parser {
         let Some(layer) = self.open.as_mut() else {
             return;
         };
-        // Continue the current toolpath only if kind, width-epoch, and (for formula widths) the
-        // effective width all match — otherwise a same-role run would collapse to its first width.
+        // Continue the current toolpath only if kind, width-epoch, and effective width all match,
+        // else a same-role run would collapse to its first width.
         let continues = match &layer.cur {
             Some(c) => c.kind == kind && c.epoch == epoch && width_close(c.width_um, width_um),
             None => false,
@@ -615,8 +593,7 @@ fn finish_tp(c: CurTp) -> Toolpath {
     }
 }
 
-/// Whether two widths are close enough to belong to the same toolpath (5% + 20 µm). Splits a genuine
-/// width change (a 4× bead) without shattering a run of micro-varying formula widths.
+/// Whether two widths are close enough to belong to the same toolpath (5% + 20 µm).
 fn width_close(a: i64, b: i64) -> bool {
     if a == b {
         return true;
@@ -625,9 +602,8 @@ fn width_close(a: i64, b: i64) -> bool {
     (a - b).abs() <= 0.05 * a.max(b) + 20.0
 }
 
-/// Map a slicer feature-type value to a `RegionKind`. `None` = unknown/unmapped (caller falls back and
-/// records a diagnostic). Covers Cura (hyphen-uppercase), PrusaSlicer (Title Case) and OrcaSlicer/Bambu
-/// (`; FEATURE:` Title Case) vocabularies.
+/// Map a slicer feature-type value to a `RegionKind`. `None` = unknown/unmapped (caller falls back
+/// and records a diagnostic).
 fn classify_role(v: &str) -> Option<RegionKind> {
     use RegionKind::*;
     match v {
@@ -636,7 +612,7 @@ fn classify_role(v: &str) -> Option<RegionKind> {
         "SKIN" => Some(Skin),
         "FILL" => Some(Infill),
         "SUPPORT" | "SUPPORT-INTERFACE" => Some(Support),
-        // ideaMaker (Raise3D): also `;TYPE:` values, hyphen-uppercase like Cura
+        // ideaMaker (Raise3D)
         "SOLID-FILL" | "BRIDGE" => Some(Skin),
         "GAP-FILL" => Some(Infill),
         // PrusaSlicer
@@ -662,10 +638,7 @@ fn classify_role(v: &str) -> Option<RegionKind> {
     }
 }
 
-/// Whether a comment marks a layer boundary. Covers Cura (`;LAYER:`), PrusaSlicer / OrcaSlicer
-/// (`;LAYER_CHANGE`, plus the `;BEFORE_LAYER_CHANGE` / `;AFTER_LAYER_CHANGE` custom-gcode hooks seen in
-/// real 2.x output), Bambu / Orca BBL (`; CHANGE_LAYER`), Simplify3D (`; layer N, Z = ...`), and
-/// KISSlicer (`; BEGIN_LAYER_OBJECT z=...`).
+/// Whether a comment marks a layer boundary across the supported slicer vocabularies.
 fn is_layer_marker(com: &str) -> bool {
     matches!(
         com,
@@ -675,17 +648,16 @@ fn is_layer_marker(com: &str) -> bool {
         || is_s3d_layer(com)
 }
 
-/// Simplify3D layer marker: `"; layer 1, Z = 0.18"` (a digit right after `"; layer "`). Excludes the
-/// `"; layer end"` sentinel.
+/// Simplify3D layer marker: `"; layer 1, Z = 0.18"` (a digit right after `"; layer "`). Excludes
+/// the `"; layer end"` sentinel.
 fn is_s3d_layer(com: &str) -> bool {
     com.strip_prefix("; layer ")
         .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()))
 }
 
-/// Extract an inline layer height from a comment: the first `z`/`Z` token immediately followed (after
-/// optional spaces) by `=` and a number. Handles Simplify3D `Z = 0.18` and KISSlicer `z=0.200`
-/// (case-insensitive; the later `z_thickness=` on the same KISSlicer line is ignored as we return the
-/// first match).
+/// Extract an inline layer height: the first `z`/`Z` immediately followed (after optional spaces) by
+/// `=` and a number (case-insensitive). Returns the first match, so KISSlicer's later
+/// `z_thickness=` on the same line is ignored.
 fn inline_z_mm(com: &str) -> Option<f64> {
     for (i, c) in com.char_indices() {
         if c != 'z' && c != 'Z' {
@@ -707,12 +679,9 @@ fn inline_z_mm(com: &str) -> Option<f64> {
     None
 }
 
-/// Feature-role comments that carry no `;TYPE:` / `; FEATURE:` prefix. Covers the slicers that annotate
-/// features with a plain comment: Simplify3D (`; outer perimeter`), verbose Slic3r / SuperSlicer
-/// (lowercase `; perimeter`, emitted only when `gcode_comments` is on), and KISSlicer (quoted
-/// `; 'Perimeter Path', 0.8 [feed mm/s], ...`). `Some(Some(k))` = a mapped structural role,
-/// `Some(None)` = a recognized-but-unmapped/non-structural role (skirt/brim/wipe → fallback + recorded),
-/// `None` = not a role comment (ignore it).
+/// Feature-role comments that carry no `;TYPE:` / `; FEATURE:` prefix. `Some(Some(k))` = a mapped
+/// structural role, `Some(None)` = a recognized non-structural role (skirt/brim/wipe → fallback +
+/// recorded), `None` = not a role comment.
 fn bare_role(com: &str) -> Option<Option<RegionKind>> {
     use RegionKind::*;
     // KISSlicer: `; '<name>', <feed> [feed mm/s], <head> [head mm/s]` — strip the quoted name.
@@ -728,7 +697,7 @@ fn bare_role(com: &str) -> Option<Option<RegionKind>> {
             _ => None,
         });
     }
-    // Exact-match table for Simplify3D + verbose Slic3r/SuperSlicer (all lowercase).
+    // Simplify3D + verbose Slic3r/SuperSlicer (all lowercase).
     match com {
         "; outer perimeter"
         | "; inner perimeter"
@@ -817,17 +786,16 @@ fn um_round(x: f64, y: f64) -> Option<Point> {
     }
 }
 
-/// Machine-checked (bounded) proofs that the parser's float→coordinate conversions are total (never
-/// panic) and range-safe. Discharged by Kani (`cargo kani -p kerf-core`), not `cargo test`; checked for
-/// EVERY `f64` input including NaN / ±inf / subnormals. See `docs/08-semantics.md` §5.
+/// Bounded proofs that the float→coordinate conversions are total and range-safe. Discharged by Kani
+/// (`cargo kani -p kerf-core`) for every `f64` input including NaN / ±inf / subnormals.
 #[cfg(kani)]
 mod kani_proofs {
     use super::{mm_to_um, um_round};
 
     const LIMIT: i64 = 9_000_000_000_000_000_000; // < i64::MAX; the guard both fns enforce
 
-    /// `mm_to_um` never panics and, when it yields a coordinate, that coordinate is strictly inside the
-    /// guarded range — so the internal `as i64` cast is exact (never a silent saturation).
+    /// `mm_to_um` never panics and any coordinate it yields is strictly inside the guarded range, so
+    /// the internal `as i64` cast is exact.
     #[kani::proof]
     fn mm_to_um_is_total_and_in_range() {
         let mm: f64 = kani::any();
@@ -847,9 +815,9 @@ mod kani_proofs {
     }
 }
 
-/// Flatten a circular arc from `start` to `end` about `centre` (all microns) into chord points, with
-/// `start` EXCLUDED and `end` INCLUDED, keeping the max chord deviation below `tol_um`. `ccw` selects
-/// counter-clockwise (G3). A degenerate arc yields just `[end]` (a straight chord).
+/// Flatten a circular arc from `start` to `end` about the centre (all microns) into chord points,
+/// with `start` excluded and `end` included, keeping max chord deviation below `tol_um`. `ccw`
+/// selects counter-clockwise (G3). A degenerate arc yields `[end]` (a straight chord).
 fn flatten_arc(start: Point, end: Point, cx: f64, cy: f64, ccw: bool, tol_um: f64) -> Vec<Point> {
     let (sx, sy) = (start.x as f64, start.y as f64);
     let radius = ((sx - cx).powi(2) + (sy - cy).powi(2)).sqrt();
@@ -884,8 +852,8 @@ fn flatten_arc(start: Point, end: Point, cx: f64, cy: f64, ccw: bool, tol_um: f6
     pts
 }
 
-/// Arc centre (microns) from the R (radius) form, following grbl's construction. Returns `None` if the
-/// radius is too small to span the chord. Positive `r_um` selects the minor arc, negative the major.
+/// Arc centre (microns) from the R (radius) form. Returns `None` if the radius is too small to span
+/// the chord. Positive `r_um` selects the minor arc, negative the major.
 fn arc_center_from_r(start: Point, end: Point, r_um: f64, ccw: bool) -> Option<(f64, f64)> {
     let (sx, sy) = (start.x as f64, start.y as f64);
     let x = end.x as f64 - sx; // chord vector
@@ -900,7 +868,7 @@ fn arc_center_from_r(start: Point, end: Point, r_um: f64, ccw: bool) -> Option<(
     }
     let mut h_x2_div_d = -(disc.sqrt()) / d2.sqrt();
     if ccw {
-        h_x2_div_d = -h_x2_div_d; // grbl: negate for a counter-clockwise (G3) arc
+        h_x2_div_d = -h_x2_div_d; // negate for a counter-clockwise (G3) arc
     }
     if r_um < 0.0 {
         h_x2_div_d = -h_x2_div_d; // negative R selects the major (>180°) arc
@@ -987,8 +955,6 @@ mod tests {
         assert!(occ.layers.iter().any(|l| !l.cells.is_empty()));
     }
 
-    // --- regression tests for the bugs the adversarial review found ---
-
     #[test]
     fn sf1_overflow_move_does_not_delete_the_next_extrude() {
         // A single oversized coordinate must not consume the E baseline and flip the next real
@@ -998,9 +964,7 @@ mod tests {
         assert_eq!(r.diagnostics.overflow_skips, 1);
         assert_eq!(r.diagnostics.travel_toolpaths, 0); // the third move stays an extrude
         assert!(r.program.extrusion_move_count() >= 1);
-        // The real geometry survives: the last deposited point is the third move's endpoint (the
-        // extrude was not flipped to a travel and deleted). It continues the first path since the
-        // skipped move left the head at (5,0).
+        // Last deposited point is the third move's endpoint; the skipped move left the head at (5,0).
         let last = r.program.layers.last().unwrap().toolpaths.last().unwrap();
         assert_eq!(*last.path.points.last().unwrap(), Point::new(8000, 8000));
     }
@@ -1026,8 +990,6 @@ mod tests {
         let r = parse(";LAYER:0\nG1 X10 Y10 Z0.2 E1\nG0 Z0.6\nG1 X20 Y10 E2");
         assert_eq!(r.program.layers.len(), 1);
         assert_eq!(r.program.layers[0].z_um, 200); // both extrudes filed at 200, not 600
-                                                   // The pure-Z hop moves no XY, so the two extrudes form one continuous path in layer 0 that
-                                                   // reaches the second endpoint — the key point is nothing lands on a spurious 600 layer.
         let last = r.program.layers[0].toolpaths.last().unwrap();
         assert_eq!(
             *last.path.points.last().unwrap(),
@@ -1127,9 +1089,8 @@ mod tests {
 
     #[test]
     fn prusa_before_after_layer_change_markers_segment_layers() {
-        // PrusaSlicer 2.x custom-gcode convention seen in REAL Benchy output: layers are bounded by
-        // ;BEFORE_LAYER_CHANGE / ;AFTER_LAYER_CHANGE around a `G1 Z` move, with NO ;Z: / ;TYPE:.
-        // (Regression: this real file previously collapsed to a single layer.)
+        // PrusaSlicer 2.x: layers bounded by ;BEFORE_LAYER_CHANGE / ;AFTER_LAYER_CHANGE around a
+        // `G1 Z` move, with no ;Z: / ;TYPE:.
         let g = "M83\nG21\n;BEFORE_LAYER_CHANGE\nG1 Z0.2\n;AFTER_LAYER_CHANGE\nG1 X5 Y5 E.1\nG1 X15 Y5 E.5\n;BEFORE_LAYER_CHANGE\nG1 Z0.4\n;AFTER_LAYER_CHANGE\nG1 X5 Y5 E.1\nG1 X15 Y5 E.5";
         let r = parse(g);
         assert_eq!(
@@ -1140,9 +1101,7 @@ mod tests {
 
     #[test]
     fn simplify3d_layers_and_bare_roles() {
-        // Simplify3D convention (found by testing on real S3D 3.1.0 output): "; layer N, Z = <mm>"
-        // markers and BARE role comments with no ;TYPE: prefix. Previously collapsed to 1 layer with
-        // every move an unknown-role fallback.
+        // Simplify3D: "; layer N, Z = <mm>" markers and bare role comments with no ;TYPE: prefix.
         let s3d = "; G-Code generated by Simplify3D(R) Version 3.1.0\nM82\nG28\n; layer 1, Z = 0.18\n; outer perimeter\nG1 X10 Y10 E.5\nG1 X20 Y10 E1.0\n; infill\nG1 X20 Y20 E1.5\n; layer 2, Z = 0.36\n; outer perimeter\nG1 X10 Y10 E2.0\nG1 X20 Y10 E2.5";
         let r = parse(s3d);
         assert_eq!(
@@ -1159,9 +1118,7 @@ mod tests {
 
     #[test]
     fn ideamaker_solid_fill_gap_fill_and_bridge_roles_are_recognized() {
-        // ideaMaker (Raise3D) emits `;TYPE:` values SOLID-FILL / GAP-FILL / BRIDGE that previously fell
-        // back to Perimeter — the majority of deposited material on a real print. (Found by real-world
-        // testing on ideaMaker 5.3.x output.)
+        // ideaMaker (Raise3D) emits `;TYPE:` values SOLID-FILL / GAP-FILL / BRIDGE.
         let g = ";LAYER:0\n;Z:0.3\n;TYPE:SOLID-FILL\nG1 X10 Y10 E1\n;TYPE:GAP-FILL\nG1 X20 Y10 E2\n;TYPE:BRIDGE\nG1 X20 Y20 E3";
         let r = parse(g);
         let tps = &r.program.layers[0].toolpaths;
@@ -1178,8 +1135,6 @@ mod tests {
     #[test]
     fn kisslicer_layers_and_quoted_roles() {
         // KISSlicer: `; BEGIN_LAYER_OBJECT z=<mm>` boundaries + quoted `; '<Role> Path', ...` comments.
-        // Previously the whole print collapsed to one layer with every extrude an unknown-role fallback.
-        // (Found by real-world testing on KISSlicer output.)
         let g = "; KISSlicer\n; BEGIN_LAYER_OBJECT z=0.20 z_thickness=0.20\n; 'Perimeter Path', 0.8 [feed mm/s], 25.0 [head mm/s]\nG1 X10 Y10 E1\nG1 X20 Y10 E2\n; 'Sparse Infill Path', 0.8 [feed mm/s]\nG1 X20 Y20 E3\n; END_LAYER_OBJECT\n; BEGIN_LAYER_OBJECT z=0.40 z_thickness=0.20\n; 'Solid Path'\nG1 X10 Y10 E4";
         let r = parse(g);
         assert_eq!(
@@ -1203,7 +1158,6 @@ mod tests {
     #[test]
     fn verbose_slic3r_lowercase_roles_are_recognized() {
         // Slic3r / SuperSlicer with `gcode_comments` on: lowercase bare role comments (no `;TYPE:`).
-        // Previously `; perimeter` / `; solid infill` / `; support material` fell back to unknown.
         let g = ";LAYER_CHANGE\n;Z:0.2\n; perimeter\nG1 X10 Y10 E1\n; solid infill\nG1 X20 Y10 E2\n; support material\nG1 X20 Y20 E3";
         let r = parse(g);
         let tps = &r.program.layers[0].toolpaths;
@@ -1264,8 +1218,8 @@ mod tests {
 
 #[cfg(test)]
 mod proptests {
-    //! Property-based fuzzing: the parser must never panic on any input, and every program it returns
-    //! must satisfy the structural invariants downstream code relies on.
+    //! Property-based fuzzing: the parser never panics, and every program it returns satisfies the
+    //! structural invariants downstream code relies on.
     use super::*;
     use proptest::prelude::*;
 

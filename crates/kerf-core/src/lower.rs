@@ -1,16 +1,12 @@
-//! Lowering: high-level (geometric) IR -> low-level (move-plan) IR. This is the stage Kerf *owns*,
-//! and whose soundness [`crate::denote`] lets us mechanically check.
+//! Lowering: high-level (geometric) IR -> low-level (move-plan) IR.
 //!
-//! v0 lowering is deliberately minimal: emit each region's fills as extruding toolpaths tagged with
-//! the region's role, inserting a `Travel` move between consecutive extruding paths. No seam
-//! optimization, no combing, no ordering. Those become passes over [`crate::ir::lo`] later — and
-//! each such pass must preserve denotation.
+//! Emits each region's fills as extruding toolpaths tagged with the region's role, inserting a
+//! `Travel` move between consecutive extruding paths.
 
 use crate::ir::lo::{self, SegmentKind};
 use crate::ir::{hi, Point, Polyline};
 
-/// Lower a high-level program to a low-level move plan. Layer order and count are preserved (each
-/// hi layer maps to exactly one lo layer).
+/// Lower a high-level program to a low-level move plan. Each hi layer maps to exactly one lo layer.
 pub fn lower(program: &hi::Program) -> lo::Program {
     let mut out = lo::Program::new();
     for layer in &program.layers {
@@ -20,10 +16,9 @@ pub fn lower(program: &hi::Program) -> lo::Program {
         for region in &layer.regions {
             for fill in &region.fills {
                 let Some(&start) = fill.path.points.first() else {
-                    continue; // empty path deposits nothing; skip
+                    continue;
                 };
 
-                // Rapid from the previous path's end to this path's start, if they differ.
                 if let Some(prev) = last_end {
                     if prev != start {
                         toolpaths.push(lo::Toolpath {
@@ -88,7 +83,6 @@ mod tests {
         let lowered = lower(&prog);
         assert_eq!(lowered.layers.len(), 1);
         assert_eq!(lowered.extrusion_move_count(), 1);
-        // Single fill => no travel inserted.
         assert!(lowered.layers[0]
             .toolpaths
             .iter()

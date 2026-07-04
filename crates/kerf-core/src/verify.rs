@@ -1,15 +1,7 @@
-//! End-to-end verification of real slicer output: parse G-code into the IR, then check properties
-//! Kerf can state *because it owns the IR and the transforms* — which a black-box slicer tester
-//! (GlitchFinder) structurally cannot.
-//!
-//! Two independent checks over the parsed program, at a chosen raster resolution:
-//!  - **Pass soundness** — a Kerf optimization pass ([`crate::pass::TravelOrder`]) applied to the real
-//!    geometry must preserve its denotation (`denote_lo(prog) == denote_lo(pass(prog))`).
-//!  - **Translation-invariance** — a metamorphic relation ([`crate::metamorphic`]) that checks
-//!    `denote`'s coordinate handling is shift-consistent on the parsed program.
-//!
-//! A verdict is only meaningful if geometry was actually recovered: [`GcodeVerification::ok`] requires
-//! [`GcodeVerification::has_geometry`], so a file we failed to extract never reads as "sound".
+//! End-to-end verification of real slicer output: parse G-code into the IR, then check pass
+//! soundness (`denote_lo(prog) == denote_lo(pass(prog))`) and translation-invariance at a chosen
+//! raster resolution. A verdict requires recovered geometry, so an unextractable file never reads
+//! as sound.
 
 use crate::frontend::{parse, Diagnostics};
 use crate::metamorphic::translation_invariant;
@@ -22,12 +14,11 @@ use serde::Serialize;
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(Serialize))]
 pub struct GcodeVerification {
-    /// What the parser recovered / guessed / dropped.
     pub diagnostics: Diagnostics,
-    /// The resolution (microns) the checks were run at.
+    /// Resolution (microns) the checks were run at.
     pub resolution_um: i64,
-    /// Whether any extruding geometry was recovered. If false, the checks below are vacuously true and
-    /// [`GcodeVerification::ok`] is NOT satisfied — there was nothing to verify.
+    /// Whether any extruding geometry was recovered. If false the checks are vacuously true and
+    /// [`GcodeVerification::ok`] is not satisfied.
     pub has_geometry: bool,
     /// A Kerf pass preserved the deposited material of the parsed program.
     pub pass_preserves_denotation: bool,
@@ -36,8 +27,7 @@ pub struct GcodeVerification {
 }
 
 impl GcodeVerification {
-    /// The recovered program survives Kerf's transforms unchanged — AND there was geometry to check.
-    /// The `has_geometry` guard prevents a vacuously-green verdict on G-code we failed to extract.
+    /// True iff geometry was recovered and it survived Kerf's transforms unchanged.
     pub fn ok(&self) -> bool {
         self.has_geometry && self.pass_preserves_denotation && self.translation_invariant
     }
@@ -65,8 +55,7 @@ mod tests {
     use super::*;
     use crate::pass::Pass;
 
-    // Three disjoint features in a travel-wasting order (near-origin, far, middle), so TravelOrder
-    // genuinely reorders (and may reverse) rather than no-op'ing — makes the soundness check non-vacuous.
+    // Disjoint features in travel-wasting order so TravelOrder genuinely reorders rather than no-ops.
     const SCATTERED: &str = "M83\nG21\n;LAYER_CHANGE\n;Z:0.2\n;TYPE:External perimeter\n;WIDTH:0.45\nG0 X0 Y0\nG1 X1 Y0 E.1\nG0 X80 Y0\nG1 X81 Y0 E.1\nG0 X20 Y0\nG1 X21 Y0 E.1";
 
     #[test]
@@ -100,8 +89,6 @@ mod tests {
 
     #[test]
     fn arc_program_verifies_sound_end_to_end() {
-        // Arcs flatten to chord polylines that must survive lowering, TravelOrder (incl. reversal),
-        // and the metamorphic check just like straight moves.
         let arc = "M83\nG21\n;LAYER_CHANGE\n;Z:0.2\n;TYPE:Perimeter\nG0 X10 Y0\nG2 X0 Y10 I-10 J0 E1\nG2 X-10 Y0 I0 J-10 E1";
         let v = verify_gcode(arc, 200);
         assert!(v.has_geometry);
@@ -110,7 +97,6 @@ mod tests {
 
     #[test]
     fn no_geometry_is_not_a_green_verdict() {
-        // A header-only file extracts nothing; the verdict must NOT be "sound".
         let v = verify_gcode("M104 S200\nG28 ; home\nM140 S60\n;comment only", 200);
         assert!(!v.has_geometry);
         assert!(

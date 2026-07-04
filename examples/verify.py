@@ -3,19 +3,17 @@
 
     uv run python examples/verify.py [path/to/file.gcode]
 
-Parses the G-code into Kerf's IR, then checks that Kerf's own operations preserve the deposited
-material (a Kerf pass keeps `denote` unchanged) and that the geometry is translation-invariant — the
-soundness properties GlitchFinder cannot express, run here on real slicer output.
+Checks that a Kerf pass preserves denotation and that geometry is translation-invariant.
 """
 
 import json
 import pathlib
 import sys
 
-import kerf
+import pykerf
 
 path = sys.argv[1] if len(sys.argv) > 1 else str(pathlib.Path(__file__).parent / "sample.gcode")
-report = json.loads(kerf.verify_gcode(pathlib.Path(path).read_text()))
+report = json.loads(pykerf.verify_gcode(pathlib.Path(path).read_text()))
 d = report["diagnostics"]
 
 print(f"{path}")

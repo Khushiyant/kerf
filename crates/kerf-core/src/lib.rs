@@ -1,12 +1,9 @@
-//! kerf-core: the engine-independent intermediate representation for the mesh -> G-code half of
-//! fabrication, plus the lowering, backends, optimization passes, and correctness oracle.
+//! kerf-core: the engine-independent IR for the mesh -> G-code half of fabrication, plus the
+//! lowering, backends, optimization passes, and correctness oracle. No Python coupling.
 //!
-//! This crate has no Python coupling. It is the foundation; `kerf-py` is a thin binding over it.
-//!
-//! The IR has two levels ([`ir::hi`] geometric, [`ir::lo`] move-plan) joined by a [`lower`]ing that
-//! Kerf owns. [`denote`] gives both levels a shared meaning as deposited material, so lowering (and,
-//! later, each optimization [`pass`]) can be checked to *preserve denotation* — the project's central,
-//! non-redundant claim. See `docs/00-thesis.md` and `docs/06-architecture.md`.
+//! The IR has two levels ([`ir::hi`] geometric, [`ir::lo`] move-plan) joined by a [`lower`]ing.
+//! [`denote`] gives both a shared meaning as deposited material, so lowering and each [`pass`] can
+//! be checked to preserve denotation.
 
 pub mod backend;
 pub mod denote;

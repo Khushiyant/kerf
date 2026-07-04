@@ -1,7 +1,6 @@
-//! The Kerf platform HTTP API: submit verify/diff jobs, poll them, and read the immutable result — plus
-//! a minimal browser dashboard. Stateless; wired to a [`Store`] and a [`Queue`] (in-memory today,
-//! Postgres in Phase 2). Every request is authenticated by an `X-API-Key` header mapped to a tenant,
-//! and every read is tenant-scoped so one tenant can never see another's jobs or results.
+//! Kerf HTTP API: submit verify/diff jobs, poll them, read the immutable result, plus a browser
+//! dashboard. Every request is authenticated by an `X-API-Key` header mapped to a tenant, and every
+//! read is tenant-scoped.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -26,7 +25,7 @@ const DEFAULT_RESOLUTION_UM: i64 = 200;
 pub enum Role {
     /// Read-only: may read jobs / results / alerts, may not submit work.
     Reader,
-    /// May submit work (verify / diff / check) and register baselines — plus everything a Reader can.
+    /// May submit work and register baselines, plus everything a Reader can.
     Writer,
 }
 
@@ -48,8 +47,8 @@ pub struct AppState {
     pub metrics: Arc<Metrics>,
 }
 
-/// Build the router. `GET /` serves the dashboard; `/healthz` + `/readyz` are unauthenticated probes;
-/// everything under `/v1` requires a valid `X-API-Key`.
+/// Build the router. `/healthz` and `/readyz` are unauthenticated probes; everything under `/v1`
+/// requires a valid `X-API-Key`.
 pub fn build_router(state: AppState) -> Router {
     let app = Router::new()
         .route("/", get(dashboard))
@@ -66,8 +65,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/v1/projects/{project}/check", post(post_check))
         .route("/v1/alerts", get(get_alerts))
         .with_state(state);
-    // Per-request OpenTelemetry spans when built with the `otel` feature. The span is emitted at INFO
-    // so the default `info` filter keeps it (tower-http defaults to DEBUG, which would be dropped).
+    // Span emitted at INFO so the default `info` filter keeps it (tower-http defaults to DEBUG).
     #[cfg(feature = "otel")]
     let app = app.layer(
         tower_http::trace::TraceLayer::new_for_http()
@@ -76,9 +74,8 @@ pub fn build_router(state: AppState) -> Router {
     app
 }
 
-/// Initialize tracing. With the `otel` feature, exports spans over OTLP to
-/// `OTEL_EXPORTER_OTLP_ENDPOINT` (default `http://localhost:4317`, e.g. a Jaeger collector) and also
-/// logs to stderr. Without the feature, a no-op.
+/// Initialize tracing: export spans over OTLP to `OTEL_EXPORTER_OTLP_ENDPOINT`
+/// (default `http://localhost:4317`) and log to stderr.
 #[cfg(feature = "otel")]
 pub fn init_telemetry() {
     use opentelemetry::KeyValue;
@@ -335,7 +332,7 @@ async fn get_diff_png(
                 .ok_or(StatusCode::NOT_FOUND)?;
             (input.clone(), baseline.blob)
         }
-        JobSpec::Verify { .. } => return Err(StatusCode::BAD_REQUEST), // nothing to diff
+        JobSpec::Verify { .. } => return Err(StatusCode::BAD_REQUEST),
     };
     let (Some(a), Some(b)) = (st.store.get_blob(&a_id), st.store.get_blob(&b_id)) else {
         return Err(StatusCode::NOT_FOUND);
@@ -343,7 +340,7 @@ async fn get_diff_png(
 
     let res = job.resolution_um;
     let layer = q.layer;
-    // Rendering re-runs denote (CPU) — keep it off the async reactor.
+    // Rendering re-runs denote (CPU-bound); keep it off the async reactor.
     let png = tokio::task::spawn_blocking(move || {
         let a = String::from_utf8_lossy(&a).into_owned();
         let b = String::from_utf8_lossy(&b).into_owned();
@@ -494,18 +491,15 @@ mod tests {
         let (st, store, queue) = state();
         let app = build_router(st);
 
-        // 1. Submit a verify job over HTTP.
         let (code, body) = send(app.clone(), verify_req(Some("dev"))).await;
         assert_eq!(code, StatusCode::ACCEPTED);
         let job_id = serde_json::from_str::<serde_json::Value>(&body).unwrap()["job_id"]
             .as_u64()
             .unwrap();
 
-        // 2. A worker processes it (same shared store + queue).
         let outcome = kerf_worker::process_one(store.as_ref(), queue.as_ref());
         assert!(matches!(outcome, kerf_worker::Outcome::Completed { .. }));
 
-        // 3. The job is done and points at a result.
         let (code, body) = send(
             app.clone(),
             Request::builder()
@@ -520,7 +514,6 @@ mod tests {
             .as_u64()
             .unwrap();
 
-        // 4. The immutable result reads back as SOUND.
         let (code, body) = send(
             app,
             Request::builder()
@@ -630,7 +623,6 @@ mod tests {
             kerf_worker::process_one(store.as_ref(), queue.as_ref()),
             kerf_worker::Outcome::Completed { .. }
         ));
-        // The result id equals the job id here (first job, first result), but fetch it properly.
         let (_, jbody) = send(
             app.clone(),
             Request::builder()
@@ -708,7 +700,6 @@ mod tests {
 
     #[tokio::test]
     async fn tenants_cannot_read_across_the_boundary() {
-        // acme submits; a key for another tenant must not see the job.
         let store: Arc<dyn Store> = Arc::new(MemStore::new());
         let queue: Arc<dyn Queue> = Arc::new(MemQueue::default());
         let keys = Arc::new(HashMap::from([
@@ -740,6 +731,6 @@ mod tests {
                 .unwrap(),
         )
         .await;
-        assert_eq!(code, StatusCode::NOT_FOUND); // isolated, not leaked
+        assert_eq!(code, StatusCode::NOT_FOUND);
     }
 }

@@ -1,15 +1,13 @@
 //! Backend: lower the low-level move plan to RepRap/Marlin-flavored G-code.
 //!
-//! This is a FAITHFUL emitter: it emits real per-segment extrusion (E from a volumetric flow model),
-//! retraction on travels, and `;TYPE:` / `;WIDTH:` comments — so re-parsing the output recovers the
-//! same deposited material. Round-trip therefore preserves `denote` (see `round_trip_preserves_denotation`).
-//! `denote` remains THE semantic reference; this backend is a consumer of the IR, not its definition.
+//! Emits per-segment extrusion (E from a volumetric flow model), retraction on travels, and
+//! `;TYPE:` / `;WIDTH:` comments, so re-parsing the output recovers the same deposited material.
 
 use crate::ir::lo::{Program, SegmentKind};
 use crate::ir::RegionKind;
 use std::fmt::Write;
 
-/// Options controlling faithful G-code emission.
+/// Options controlling G-code emission.
 #[derive(Clone, Copy, Debug)]
 pub struct GcodeOptions {
     /// Filament diameter (mm) for the flow model that turns width×height×length into an E amount.
@@ -88,7 +86,7 @@ pub fn to_gcode_with(program: &Program, opts: &GcodeOptions) -> String {
                     }
                     travel_to(&mut out, &mut cur, start, &mut retracted, opts);
                     if retracted {
-                        let _ = writeln!(out, "G1 E{:.5}", opts.retraction_mm); // unretract
+                        let _ = writeln!(out, "G1 E{:.5}", opts.retraction_mm);
                         retracted = false;
                     }
                     let w_mm = tp.width_um as f64 / 1000.0;
@@ -147,7 +145,7 @@ fn travel_to(
     *cur = Some(target);
 }
 
-/// A `;TYPE:` string that the parser's `classify_role` maps back to the same `RegionKind`.
+/// A `;TYPE:` string the parser's `classify_role` maps back to the same `RegionKind`.
 fn role_str(r: RegionKind) -> &'static str {
     match r {
         RegionKind::Perimeter => "Perimeter",
@@ -184,13 +182,11 @@ mod tests {
         assert!(g.contains("G0 Z0.200"));
         assert!(g.contains(";TYPE:Perimeter"));
         assert!(g.contains(";WIDTH:0.400"));
-        assert!(g.contains("G1 X20.000 Y0.000 E")); // real extrusion, not a bare move
+        assert!(g.contains("G1 X20.000 Y0.000 E"));
     }
 
     #[test]
     fn round_trip_preserves_denotation() {
-        // Build a hi program, lower it, emit faithful G-code, re-parse, and confirm the deposited
-        // material is unchanged — the definition of a faithful backend.
         let path = |pts: Vec<(i64, i64)>| {
             Polyline::new(pts.into_iter().map(|(x, y)| Point::new(x, y)).collect())
         };

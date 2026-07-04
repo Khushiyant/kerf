@@ -1,14 +1,8 @@
 //! The travel-order pass: reduce wasted non-printing movement.
 //!
-//! For each layer it greedily reorders the extruding toolpaths (nearest-neighbour over their
-//! endpoints), optionally reversing an open path when that shortens the hop, then regenerates the
-//! travel moves between them. This mirrors CuraEngine's `PathOrderOptimizer` in spirit.
-//!
-//! It preserves denotation: it never adds, drops, or geometrically alters an extruding path —
-//! reordering changes nothing about deposited material, and travel moves denote nothing. Reversing a
-//! path is safe *only because* [`crate::denote`] canonicalizes segment endpoints and is therefore
-//! reversal-invariant; that invariance is a property of `denote`, checked by
-//! [`crate::pass::preserves_denotation`], not something to take on faith here.
+//! Per layer, greedily reorders extruding toolpaths (nearest-neighbour over endpoints), optionally
+//! reversing an open path to shorten a hop, then regenerates travel moves. Reversing a path is safe
+//! only because [`crate::denote`] canonicalizes segment endpoints and is reversal-invariant.
 
 use super::Pass;
 use crate::ir::lo::{self, SegmentKind, Toolpath};
@@ -17,9 +11,9 @@ use crate::ir::{Point, Polyline};
 /// Reorders each layer's extruding toolpaths to reduce travel distance.
 #[derive(Clone, Copy, Debug)]
 pub struct TravelOrder {
-    /// Reference point the per-layer tour starts from (typically the origin or prior layer's end).
+    /// Reference point the per-layer tour starts from.
     pub start: Point,
-    /// Whether an open path may be traversed in reverse to shorten a hop (safe: same swept area).
+    /// Whether an open path may be traversed in reverse to shorten a hop.
     pub allow_reverse: bool,
 }
 
@@ -32,9 +26,8 @@ impl Default for TravelOrder {
     }
 }
 
-/// Squared Euclidean distance in f64. This only ranks candidates for the greedy tour — it never
-/// affects denotation — so f64 (which cannot overflow or panic on extreme `i64` coordinates, unlike
-/// an `i128` product) is exactly right here.
+/// Squared Euclidean distance in f64. Only ranks greedy-tour candidates, never affects denotation;
+/// f64 cannot overflow or panic on extreme `i64` coordinates.
 fn dist2(a: Point, b: Point) -> f64 {
     let dx = a.x as f64 - b.x as f64;
     let dy = a.y as f64 - b.y as f64;
@@ -87,8 +80,8 @@ impl Pass for TravelOrder {
     fn run(&self, program: lo::Program) -> lo::Program {
         let mut out = lo::Program::new();
         for layer in program.layers {
-            // Keep only extruding paths; drop existing travels (we regenerate them). Empty-point
-            // paths carry no material and no endpoints — set them aside and append unchanged.
+            // Keep only extruding paths; drop existing travels (regenerated below). Empty-point
+            // paths have no endpoints, so set them aside and append unchanged.
             let (nonempty, empty): (Vec<Toolpath>, Vec<Toolpath>) = layer
                 .toolpaths
                 .into_iter()
@@ -169,12 +162,10 @@ mod tests {
         let optimized = TravelOrder::default().run(lowered.clone());
         let after = optimized.travel_distance_um();
 
-        // The pass did something useful...
         assert!(
             after < before,
             "expected travel to shrink: {after} !< {before}"
         );
-        // ...without changing what is printed, or how many extruding moves there are.
         assert_eq!(
             lowered.extrusion_move_count(),
             optimized.extrusion_move_count()
@@ -225,8 +216,7 @@ mod proptests {
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(48))]
 
-        // For any low-level program, reordering never changes the deposited material. This is the
-        // real check the oracle performs on a rewriting pass.
+        // For any program, reordering never changes the deposited material.
         #[test]
         fn travel_order_preserves_denotation(prog in arb_program()) {
             prop_assert!(preserves_denotation(&TravelOrder::default(), &prog, 300));

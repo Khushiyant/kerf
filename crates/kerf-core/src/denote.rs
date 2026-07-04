@@ -1,42 +1,15 @@
-//! Denotational semantics: what a program *means* as deposited material.
+//! Denotational semantics: a program's meaning as deposited material.
 //!
-//! [`denote_hi`] / [`denote_lo`] map a program to an [`Occupancy`] — the set of material-occupied
-//! cells per layer. Meaning is defined over EXTRUDING paths only: each is swept (a Minkowski sum of
-//! the polyline with a disk of diameter `width_um`) and the swept regions are unioned within a layer.
-//! Travel denotes nothing.
+//! [`denote_hi`] / [`denote_lo`] map a program to an [`Occupancy`] — material-occupied cells per
+//! layer. Meaning is defined over EXTRUDING paths only: each is swept (Minkowski sum of the polyline
+//! with a disk of diameter `width_um`) and unioned within a layer; travel denotes nothing.
+//! Equality of [`Occupancy`] means the two programs deposit the same material up to the raster
+//! resolution.
 //!
-//! This is the REFERENCE semantics: correctness-first. It rasterizes onto the integer-micron lattice
-//! at a chosen resolution. Two optimizations keep it usable at scale *without changing the marked set*
-//! (both pinned by `optimized_raster_marks_exactly_the_bruteforce_set`): each segment's per-row column
-//! scan is restricted to the covered band (perpendicular-distance prune in [`mark_capsule`]), and
-//! layers — being independent — are rasterized in parallel. A ~100k-move print verifies in a few
-//! seconds; the meaning is unchanged, only the wasted work is removed.
-//!
-//! # What the oracle guarantees (and what it does not)
-//!
-//! Equality of [`Occupancy`] means the two programs deposit the same material **up to the raster
-//! resolution**. Two properties make that guarantee trustworthy where earlier versions did not:
-//!
-//!  - **Reversal / direction invariance.** Segment endpoints are canonicalized before any float math
-//!    (see [`mark_capsule`]), so traversing a path forward or backward denotes *exactly* the same
-//!    cells. Every reordering pass (e.g. [`crate::pass::TravelOrder`], which may reverse paths) relies
-//!    on this; without it the pass was unsound against its own oracle.
-//!  - **Conservative coverage, not centre-sampling.** A cell is marked if the swept capsule reaches
-//!    within the cell's circumradius of its centre — i.e. if it touches the cell *at all* — so a real
-//!    feature is never entirely missed when the resolution is `<=` its width. (An earlier centre-only
-//!    test let a 0.4 mm wall lying between grid centres register as zero cells, so deleting it read as
-//!    "preserved". Coverage closes that false-confidence hole.)
-//!
-//! **Residual limitation, stated honestly:** the check is only as sharp as the resolution. Changes
-//! smaller than a cell (a sub-resolution vertex nudge, a width tweak far below the grid) may be
-//! conflated. Choose `resolution_um <= the smallest feature you care about` (e.g. the nozzle/line
-//! width). This is pinned by `oracle_is_blind_below_resolution` in the tests, not hidden.
-//!
-//! Load-bearing rules: the lossy G-code backend ([`crate::backend`]) drops `width_um`, so it MUST NOT
-//! be the semantic reference — meaning is defined here. Float distance is used only INSIDE this
-//! checker; the IR stays exact integer microns. Rotated-geometry comparison, when added, must lift to
-//! rationals or a bounded tolerance inside the checker, never in the IR. The denotation DOMAIN
-//! (rasterized coverage vs. exact swept region) remains provisional — see `docs/07-design-review.md`.
+//! Rules: distance math is f64 and lives only inside this checker; the IR stays exact integer
+//! microns. Cell inclusion is conservative coverage (marked if the capsule touches the cell at all),
+//! never centre-sampling, so a feature is never missed when resolution `<=` its width. The check is
+//! only as sharp as the resolution; choose `resolution_um <=` the smallest feature that matters.
 
 use std::collections::BTreeSet;
 
@@ -53,14 +26,14 @@ pub struct LayerOccupancy {
     pub cells: BTreeSet<(i64, i64)>,
 }
 
-/// Occupancy of a whole program, layer-parallel. Two programs denote the same material (at this
-/// resolution) iff their occupancies are equal.
+/// Occupancy of a whole program. Two programs denote the same material at this resolution iff their
+/// occupancies are equal.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Occupancy {
     pub layers: Vec<LayerOccupancy>,
 }
 
-/// Squared distance from point `p` to segment `a`-`b`, in f64. Reference-checker math only.
+/// Squared distance from point `p` to segment `a`-`b`, in f64.
 fn dist2_point_seg(p: (f64, f64), a: (f64, f64), b: (f64, f64)) -> f64 {
     let (dx, dy) = (b.0 - a.0, b.1 - a.1);
     let len2 = dx * dx + dy * dy;
@@ -74,13 +47,9 @@ fn dist2_point_seg(p: (f64, f64), a: (f64, f64), b: (f64, f64)) -> f64 {
     ex * ex + ey * ey
 }
 
-/// Canonical (direction-independent) endpoint order for a segment.
-///
-/// This is the *mechanism* of reversal invariance (P1): everything `mark_capsule` computes downstream
-/// depends on a segment only through this ordered pair, so `canon_seg(p, q) == canon_seg(q, p)` implies
-/// the marked cells are identical forward and backward. That equality is machine-checked for **all**
-/// `i64` endpoints by the Kani harness `canon_seg_is_order_independent` (see the `kani_proofs` module),
-/// and pinned at the denotation level by `denote_is_reversal_invariant`.
+/// Canonical (direction-independent) endpoint order for a segment. Everything `mark_capsule`
+/// computes depends on a segment only through this ordered pair, so the marked cells are identical
+/// forward and backward.
 fn canon_seg(p: Point, q: Point) -> (Point, Point) {
     if (p.x, p.y) <= (q.x, q.y) {
         (p, q)
@@ -91,19 +60,14 @@ fn canon_seg(p: Point, q: Point) -> (Point, Point) {
 
 /// Mark every grid cell the capsule (segment `p`-`q` thickened by `half`) overlaps.
 ///
-/// Endpoints are canonicalized (ordered) before any float math, so the marked set is identical
-/// whether a path is traversed forward or reversed. Inclusion is conservative *coverage*: a cell is
-/// marked when the capsule reaches within the cell's circumradius (`r/√2`) of its centre, so no cell
-/// the capsule actually touches is ever missed. That over-marks boundary cells slightly — the right
-/// trade for an oracle, which must never *under*-report deposited material.
+/// Endpoints are canonicalized before any float math, so the marked set is identical forward or
+/// reversed. Inclusion is conservative coverage: a cell is marked when the capsule reaches within the
+/// cell's circumradius (`r/√2`) of its centre, so no touched cell is ever missed.
 fn mark_capsule(cells: &mut BTreeSet<(i64, i64)>, p: Point, q: Point, half: f64, r: i64) {
-    // Direction-independent endpoint order: the whole pass framework depends on this invariance.
-    // (Validated: removing this makes `denote_is_reversal_invariant`'s flip cases fail.)
     let (a, b) = canon_seg(p, q);
     let reach = half + (r as f64) * std::f64::consts::FRAC_1_SQRT_2;
     let pad = reach.ceil() as i64;
-    // Saturating so an extreme coordinate can never overflow the bbox (the loop range stays small —
-    // it spans only the segment plus `pad`).
+    // Saturating so an extreme coordinate can never overflow the bbox.
     let minx = a.x.min(b.x).saturating_sub(pad);
     let maxx = a.x.max(b.x).saturating_add(pad);
     let miny = a.y.min(b.y).saturating_sub(pad);
@@ -117,13 +81,11 @@ fn mark_capsule(cells: &mut BTreeSet<(i64, i64)>, p: Point, q: Point, half: f64,
     let (cj0, cj1) = (miny.div_euclid(r), maxy.div_euclid(r));
     let (dx, dy) = (bf.0 - af.0, bf.1 - af.1);
     let len = (dx * dx + dy * dy).sqrt();
-    // Iterate rows; per row, restrict the tested columns to a *superset* of the covered interval —
-    // those cells whose PERPENDICULAR distance to the infinite line a-b is within `reach`. Because
-    // distance-to-segment >= perpendicular-distance-to-line, that band contains every covered cell, and
-    // each candidate is still decided by the exact `dist2_point_seg` predicate below, so the marked set
-    // is byte-for-byte identical to a full bounding-box scan — this only skips provably-empty columns
-    // (the bulk of the box for a diagonal segment). A near-horizontal / degenerate segment falls back
-    // to the full row.
+    // Per row, restrict tested columns to a superset of the covered interval: cells whose
+    // perpendicular distance to the infinite line a-b is within `reach`. Since distance-to-segment >=
+    // perpendicular-distance-to-line, that band contains every covered cell, and each candidate is
+    // still decided by the exact `dist2_point_seg` predicate below, so the marked set is identical to
+    // a full bounding-box scan. A near-horizontal / degenerate segment falls back to the full row.
     for cj in cj0..=cj1 {
         let cy = cj as f64 * rf + half_r;
         let (mut lo, mut hi) = (ci0, ci1);
@@ -136,9 +98,9 @@ fn mark_capsule(cells: &mut BTreeSet<(i64, i64)>, p: Point, q: Point, half: f64,
                 let x1 = af.0 + (-rlen - bconst) / a_coef;
                 let x2 = af.0 + (rlen - bconst) / a_coef;
                 let (xlo, xhi) = if x1 <= x2 { (x1, x2) } else { (x2, x1) };
-                // x = ci*r + half_r  =>  ci = (x - half_r) / r. Round the interval outward, clamp into
-                // the bbox range in f64 (avoids an i64-cast overflow for extreme coordinates), then
-                // widen by one cell as a float-rounding guard.
+                // ci = (x - half_r) / r. Round outward, clamp into the bbox range in f64 (avoids an
+                // i64-cast overflow for extreme coordinates), then widen by one cell as a
+                // float-rounding guard.
                 let clo = ((xlo - half_r) / rf).floor().max(ci0 as f64) as i64;
                 let chi = ((xhi - half_r) / rf).ceil().min(ci1 as f64) as i64;
                 lo = clo.saturating_sub(1).max(ci0);
@@ -152,7 +114,7 @@ fn mark_capsule(cells: &mut BTreeSet<(i64, i64)>, p: Point, q: Point, half: f64,
             continue;
         }
         for ci in lo..=hi {
-            // Compute the cell centre in f64: `ci * r` would overflow i64 for extreme coordinates.
+            // Cell centre in f64: `ci * r` would overflow i64 for extreme coordinates.
             let center = (ci as f64 * rf + half_r, cy);
             if dist2_point_seg(center, af, bf) <= reach2 {
                 cells.insert((ci, cj));
@@ -187,10 +149,9 @@ fn occupancy_of(paths: &[(&Polyline, i64)], z_um: i64, resolution_um: i64) -> La
 
 /// Denote a high-level program: union the swept material of every region's fills, per layer.
 ///
-/// Note: `denote` measures *deposited filament* — the swept `fills`. A [`hi::Region`]'s `boundary` is
-/// denotationally inert: `denote` does not check that the fills actually cover the boundary as
-/// promised. "Preserves `denote`" therefore means "deposits the same material," not "fills the region
-/// it claims to." Verifying fill-vs-boundary agreement is a separate (future) property.
+/// Measures deposited filament (the swept `fills`) only; a [`hi::Region`]'s `boundary` is
+/// denotationally inert, so equality means "deposits the same material," not "fills the claimed
+/// region."
 pub fn denote_hi(program: &hi::Program, resolution_um: i64) -> Occupancy {
     Occupancy {
         layers: map_layers(&program.layers, |layer| {
@@ -205,8 +166,7 @@ pub fn denote_hi(program: &hi::Program, resolution_um: i64) -> Occupancy {
 }
 
 /// Map each layer to its occupancy. Layers are independent, so this fans out across cores; the
-/// order-preserving collect keeps the result identical to a serial map (a `denote` value is a
-/// deterministic function of the program). Serial under Kani to keep the proof build dependency-light.
+/// order-preserving collect keeps the result identical to a serial map.
 #[cfg(not(kani))]
 fn map_layers<L, F>(layers: &[L], f: F) -> Vec<LayerOccupancy>
 where
@@ -240,30 +200,21 @@ pub fn denote_lo(program: &lo::Program, resolution_um: i64) -> Occupancy {
     }
 }
 
-/// The first non-redundant verification artifact: *lowering preserves denotation*.
-///
-/// Checks `denote_hi(prog) == denote_lo(lower(prog))` at the given resolution. GlitchFinder cannot
-/// state this property because it owns no IR or lowering; here the lowering is ours, so its soundness
-/// is mechanically checkable. The v0 lowering only reorders and inserts travel, so this holds by
-/// construction — the value right now is the *harness and the property*. It becomes a genuine check
-/// the moment a pass rewrites the move plan.
+/// Whether lowering preserves denotation: `denote_hi(prog) == denote_lo(lower(prog))` at the given
+/// resolution.
 pub fn self_lowering_sound(program: &hi::Program, resolution_um: i64) -> bool {
     denote_hi(program, resolution_um) == denote_lo(&crate::lower::lower(program), resolution_um)
 }
 
-/// Machine-checked (bounded) proofs, discharged by Kani (`cargo kani -p kerf-core`). These are not run
-/// by `cargo test`; they are model-checked exhaustively over their input domains, which property tests
-/// only sample. Each harness targets a *pure kernel* the reference semantics depends on — deliberately
-/// loop- and allocation-free so the model checker terminates. See `docs/08-semantics.md` §5.
+/// Bounded proofs discharged by Kani (`cargo kani -p kerf-core`), not run by `cargo test`. Each
+/// harness targets a pure, loop- and allocation-free kernel so the model checker terminates.
 #[cfg(kani)]
 mod kani_proofs {
     use super::{canon_seg, dist2_point_seg};
     use crate::ir::Point;
 
-    /// **P1 mechanism, for all `i64` endpoints.** `denote` depends on a segment only through
-    /// `canon_seg`, so proving the canonical order is identical regardless of input order proves
-    /// reversal invariance at its root — exhaustively, not by sampling. Removing the canonicalization
-    /// (the historical bug) makes this fail.
+    /// Canonical order is identical regardless of input order, for all `i64` endpoints — the root of
+    /// reversal invariance.
     #[kani::proof]
     fn canon_seg_is_order_independent() {
         let p = Point::new(kani::any(), kani::any());
@@ -277,9 +228,8 @@ mod kani_proofs {
         v
     }
 
-    /// The checker's squared distance is **non-negative and finite** for finite inputs, so a NaN or a
-    /// negative value can never leak into the `dist <= reach²` coverage comparison and produce a
-    /// spurious SOUND/UNSOUND verdict.
+    /// Squared distance is non-negative and finite for finite inputs, so no NaN or negative value can
+    /// leak into the `dist <= reach²` coverage comparison.
     #[kani::proof]
     fn dist2_point_seg_is_nonneg_and_finite() {
         let bound = 1.0e6_f64;
@@ -335,8 +285,6 @@ mod tests {
         assert!(self_lowering_sound(&square_program(), 200));
     }
 
-    // --- regression tests for the soundness bugs the adversarial review found ---
-
     fn single_path(points: Vec<Point>, width_um: i64) -> hi::Program {
         hi::Program {
             layers: vec![hi::Layer {
@@ -355,11 +303,9 @@ mod tests {
 
     #[test]
     fn coverage_catches_a_thin_wall_between_grid_centres() {
-        // A 0.4 mm wall at a coarse (1 mm) resolution. The old centre-only test missed it entirely,
-        // so deleting it read as "preserved". Conservative coverage marks it.
+        // A 0.4 mm wall at coarse (1 mm) resolution: conservative coverage marks it.
         let wall = single_path(vec![Point::new(1000, 0), Point::new(1000, 10_000)], 400);
         assert!(!denote_hi(&wall, 1000).layers[0].cells.is_empty());
-        // And it must differ from depositing nothing.
         assert_ne!(
             denote_hi(&wall, 1000),
             denote_hi(&single_path(vec![], 0), 1000)
@@ -368,10 +314,8 @@ mod tests {
 
     #[test]
     fn denote_is_reversal_invariant() {
-        // Cases at zero width / resolution 1 — the float-boundary regime where the pre-canonicalization
-        // `dist2_point_seg` asymmetry actually flips a cell. Each of these FAILS if the endpoint
-        // canonicalization in `mark_capsule` is removed (verified), so this is a real guard, not a
-        // tautology.
+        // Zero width / resolution 1: the float-boundary regime where endpoint order flips a cell if
+        // canonicalization is removed.
         let cases = [
             vec![Point::new(0, 0), Point::new(600, 0), Point::new(0, 300)],
             vec![Point::new(1684, 1700), Point::new(506, 1054)],
@@ -390,8 +334,7 @@ mod tests {
 
     #[test]
     fn denote_discriminates_line_width() {
-        // A property `lowering_preserves_denotation` silently depends on: width must affect denotation,
-        // else a width-changing pass would pass vacuously.
+        // Width must affect denotation, else a width-changing pass would pass vacuously.
         let thin = single_path(vec![Point::new(0, 5000), Point::new(10_000, 5000)], 200);
         let thick = single_path(vec![Point::new(0, 5000), Point::new(10_000, 5000)], 400);
         assert_ne!(denote_hi(&thin, 100), denote_hi(&thick, 100));
@@ -410,7 +353,7 @@ mod tests {
         let mut r = pts.to_vec();
         r.reverse();
         let rev = single_path(r, width_um);
-        // resolution 1: the sharpest grid, where float-boundary asymmetry would surface first.
+        // resolution 1: the sharpest grid, where float-boundary asymmetry surfaces first.
         assert_eq!(
             denote_hi(&fwd, 1),
             denote_hi(&rev, 1),
@@ -420,11 +363,8 @@ mod tests {
 
     #[test]
     fn reversal_invariant_exhaustively_over_small_programs() {
-        // Bounded verification *by enumeration* of P1 (reversal invariance): every 2- and 3-point
-        // polyline over a small coordinate grid, at resolution 1, must denote identically forwards
-        // and backwards. Unlike the proptest (which samples), this checks the whole bounded domain
-        // exhaustively — no small program escapes. The knife-edge unit test above is the guard that
-        // *fails* if canonicalization is removed; this is the "holds for all of them" companion.
+        // Reversal invariance by enumeration: every 2- and 3-point polyline over a small coordinate
+        // grid, at resolution 1, must denote identically forwards and backwards.
         let grid2 = [0i64, 1, 2, 3, 5, 8, 13]; // dense grid for the 2-point sweep
         let grid3 = [0i64, 1, 3, 7, 13]; // sparser grid keeps the 3-point sweep tractable
         let widths = [0i64, 2, 5];
@@ -470,9 +410,9 @@ mod tests {
 
     #[test]
     fn optimized_raster_marks_exactly_the_bruteforce_set() {
-        // Safety net for the perpendicular-band column pruning in `mark_capsule`: it must mark EXACTLY
-        // the cells a full bounding-box scan marks — the optimization changes speed, never meaning.
-        // Uses the real private `canon_seg` / `dist2_point_seg` so the brute reference is bit-identical.
+        // The perpendicular-band column pruning in `mark_capsule` must mark exactly the cells a full
+        // bounding-box scan marks. Reuses `canon_seg` / `dist2_point_seg` so the reference is
+        // bit-identical.
         fn brute(a: Point, b: Point, width_um: i64, r: i64) -> BTreeSet<(i64, i64)> {
             let (a, b) = canon_seg(a, b);
             let half = width_um.max(0) as f64 / 2.0;
@@ -519,14 +459,14 @@ mod tests {
 
     #[test]
     fn oracle_is_blind_below_resolution() {
-        // Honest, pinned limitation: the check is only as sharp as its resolution.
+        // The check is only as sharp as its resolution.
         let base = single_path(vec![Point::new(0, 500), Point::new(3000, 500)], 400);
         let nudged = single_path(vec![Point::new(0, 500), Point::new(3001, 500)], 400); // +1 µm
         let moved = single_path(vec![Point::new(0, 500), Point::new(3000, 4000)], 400); // +3.5 mm
 
-        // A sub-resolution nudge is NOT distinguished at a coarse resolution (expected, documented).
+        // A sub-resolution nudge is not distinguished at a coarse resolution.
         assert_eq!(denote_hi(&base, 1000), denote_hi(&nudged, 1000));
-        // A change larger than the resolution IS caught.
+        // A change larger than the resolution is caught.
         assert_ne!(denote_hi(&base, 1000), denote_hi(&moved, 1000));
     }
 }
@@ -583,18 +523,15 @@ mod proptests {
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(48))]
 
-        // The self-lowering-soundness property over arbitrary programs: lowering never changes what
-        // material is deposited. This is the harness the real (rewriting) passes will be checked by.
+        // Lowering never changes what material is deposited, over arbitrary programs.
         #[test]
         fn lowering_preserves_denotation(prog in arb_program()) {
             prop_assert!(self_lowering_sound(&prog, 300));
         }
 
-        // denote is invariant under path reversal (broad check, with the fix in place). The
-        // deterministic *guard* for this property — the cases that FAIL without the endpoint
-        // canonicalization — is the `denote_is_reversal_invariant` unit test; a random proptest does
-        // not reliably hit the float knife-edge (verified: 2000 cases over large coords missed it),
-        // so the guarantee is pinned by explicit cases rather than by chance.
+        // denote is invariant under path reversal (broad check). The deterministic guard is the
+        // `denote_is_reversal_invariant` unit test; a random proptest does not reliably hit the float
+        // knife-edge.
         #[test]
         fn reversal_invariant(prog in arb_program()) {
             prop_assert_eq!(denote_hi(&prog, 100), denote_hi(&reverse_all_paths(prog.clone()), 100));

@@ -1,6 +1,5 @@
-//! Frontends turn external artifacts INTO the IR — the inverse of backends. v0: a G-code parser
-//! (`gcode`) that reads real Cura / PrusaSlicer / OrcaSlicer output back into [`crate::ir::lo`], so
-//! Kerf can verify what real slicers actually produce.
+//! Frontends turn external artifacts into the IR, the inverse of backends. v0: a G-code parser
+//! (`gcode`) that reads slicer output back into [`crate::ir::lo`].
 
 pub mod gcode;
 

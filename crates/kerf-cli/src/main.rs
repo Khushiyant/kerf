@@ -1,5 +1,5 @@
-//! `kerf` — the command-line front door to the Kerf verifier: parse real slicer G-code into the IR,
-//! then check that Kerf's operations preserve the deposited material.
+//! `kerf` CLI: parse slicer G-code into the IR and verify that Kerf's operations preserve the
+//! deposited material.
 
 use std::process::ExitCode;
 
@@ -27,6 +27,7 @@ COMMANDS:
 OPTIONS:
     --resolution <um>   Raster resolution in microns for the checks (default 200).
     --json              Emit the report as JSON instead of text.
+    -V, --version       Print the version.
     -h, --help          Show this help.
 ";
 
@@ -44,6 +45,11 @@ fn main() -> ExitCode {
 fn run(args: &[String]) -> Result<ExitCode, String> {
     if args.is_empty() || args[0] == "-h" || args[0] == "--help" {
         print!("{USAGE}");
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    if args[0] == "-V" || args[0] == "--version" {
+        println!("kerf {}", env!("CARGO_PKG_VERSION"));
         return Ok(ExitCode::SUCCESS);
     }
 
@@ -131,7 +137,7 @@ fn cmd_verify(src: &str, resolution_um: i64, json_out: bool) -> Result<ExitCode,
         };
         println!("  {headline}");
     }
-    // Exit codes: 0 sound, 1 unsound, 3 nothing to verify (distinct from a usage error, which is 2).
+    // 0 sound, 1 unsound, 3 nothing to verify (2 is usage error).
     Ok(if !v.has_geometry {
         ExitCode::from(3)
     } else if v.ok() {
@@ -141,8 +147,8 @@ fn cmd_verify(src: &str, resolution_um: i64, json_out: bool) -> Result<ExitCode,
     })
 }
 
-/// Verify several files as a CI batch: one status line each (or a JSON array), non-zero exit if any
-/// file is not sound (unsound or nothing-to-verify).
+/// Verify several files as a batch: one status line each (or a JSON array); non-zero exit if any
+/// file is not sound.
 fn cmd_verify_batch(
     files: &[String],
     resolution_um: i64,
@@ -218,7 +224,7 @@ fn cmd_diff(a: &str, b: &str, resolution_um: i64, json_out: bool) -> Result<Exit
         };
         println!("  {headline}");
     }
-    // 0 identical, 1 differ, 3 nothing to compare (matches `verify`'s no-geometry contract).
+    // 0 identical, 1 differ, 3 nothing to compare.
     Ok(if d.both_empty {
         ExitCode::from(3)
     } else if d.identical {

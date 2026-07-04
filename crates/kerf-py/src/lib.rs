@@ -1,17 +1,11 @@
-//! Thin PyO3 bindings over `kerf-core`. Keep this layer minimal: translate between Python and the
-//! Rust IR, nothing more. All logic lives in `kerf-core`.
-//!
-//! The IR is exposed to Python through the JSON boundary (`kerf_core::json`), NOT as `#[pyclass]`
-//! wrappers per type — so adding an IR field never touches this file. Python builds/inspects programs
-//! as JSON strings; the demos below show the shape.
+//! PyO3 bindings over `kerf-core`. The IR crosses the boundary as JSON (`kerf_core::json`), not as
+//! `#[pyclass]` wrappers, so adding an IR field never touches this file.
 
 use kerf_core::ir::{hi, Area, ExtrudePath, Point, Polyline, RegionKind};
 use kerf_core::pass::{Pass, TravelOrder};
 use kerf_core::{backend, denote, frontend, json, lower};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-
-// ---- helpers (not exposed) -------------------------------------------------------------------
 
 fn demo_square(side_mm: f64, z_mm: f64) -> hi::Program {
     let s = (side_mm * 1000.0) as i64;
@@ -67,8 +61,6 @@ fn parse_hi(program_json: &str) -> PyResult<hi::Program> {
         .map_err(|e| PyValueError::new_err(format!("invalid high-level program JSON: {e}")))
 }
 
-// ---- JSON boundary: operate on caller-provided programs --------------------------------------
-
 /// Lower a high-level program (given as JSON) and emit G-code.
 #[pyfunction]
 fn program_to_gcode(program_json: &str) -> PyResult<String> {
@@ -82,8 +74,8 @@ fn lower_to_json(program_json: &str) -> PyResult<String> {
     json::to_json(&lowered).map_err(|e| PyValueError::new_err(e.to_string()))
 }
 
-/// Run Kerf's correctness oracle on a caller-provided high-level program (JSON): does lowering
-/// preserve the deposited material at this resolution (microns)?
+/// Does lowering the given high-level program (JSON) preserve the deposited material at this
+/// resolution (microns)?
 #[pyfunction]
 #[pyo3(signature = (program_json, resolution_um=200))]
 fn check_self_lowering_sound(program_json: &str, resolution_um: i64) -> PyResult<bool> {
@@ -93,22 +85,20 @@ fn check_self_lowering_sound(program_json: &str, resolution_um: i64) -> PyResult
     ))
 }
 
-/// The demo square serialized to JSON — an editable template for building your own programs.
+/// The demo square serialized to JSON — a template for building programs.
 #[pyfunction]
 fn demo_square_json() -> PyResult<String> {
     json::to_json(&demo_square(20.0, 0.2)).map_err(|e| PyValueError::new_err(e.to_string()))
 }
 
-// ---- self-contained demos --------------------------------------------------------------------
-
-/// G-code for a demo square: build hi IR -> lower to lo -> emit G-code.
+/// G-code for a demo square.
 #[pyfunction]
 #[pyo3(signature = (side_mm=20.0, z_mm=0.2))]
 fn demo_square_gcode(side_mm: f64, z_mm: f64) -> String {
     backend::to_gcode(&lower::lower(&demo_square(side_mm, z_mm)))
 }
 
-/// Oracle on the demo square: is the lowering denotation-preserving at this resolution?
+/// Is the demo square's lowering denotation-preserving at this resolution?
 #[pyfunction]
 #[pyo3(signature = (side_mm=20.0, z_mm=0.2, resolution_um=200))]
 fn demo_self_lowering_sound(side_mm: f64, z_mm: f64, resolution_um: i64) -> bool {
@@ -128,9 +118,8 @@ fn demo_travel_order(resolution_um: i64) -> (bool, f64, f64) {
     (sound, before / 1000.0, after / 1000.0)
 }
 
-/// Parse real slicer G-code into the IR. Returns `(program_json, diagnostics_json)` — the recovered
-/// low-level program and the side-channel diagnostics (unknown roles, estimated widths, skipped
-/// arcs/codes). Never raises on malformed G-code; it degrades and reports.
+/// Parse slicer G-code into the IR. Returns `(program_json, diagnostics_json)`. Never raises on
+/// malformed G-code; it degrades and reports via diagnostics.
 #[pyfunction]
 fn parse_gcode(gcode: &str) -> PyResult<(String, String)> {
     let report = frontend::parse(gcode);
@@ -141,9 +130,8 @@ fn parse_gcode(gcode: &str) -> PyResult<(String, String)> {
     Ok((program, diagnostics))
 }
 
-/// Verify real slicer G-code end to end: parse it, then check that a Kerf pass preserves the
-/// deposited material and that the geometry is translation-invariant. Returns a JSON report
-/// (diagnostics + verdicts). This is the check GlitchFinder cannot express, run on real output.
+/// Verify slicer G-code end to end: parse it, then check that a Kerf pass preserves the deposited
+/// material and that the geometry is translation-invariant. Returns a JSON report.
 #[pyfunction]
 #[pyo3(signature = (gcode, resolution_um=200))]
 fn verify_gcode(gcode: &str, resolution_um: i64) -> PyResult<String> {
@@ -152,8 +140,7 @@ fn verify_gcode(gcode: &str, resolution_um: i64) -> PyResult<String> {
 }
 
 /// Compare two G-code files by the material they deposit (matched by layer height). Returns a JSON
-/// report (per-layer differences, totals, identical flag). Answers "do these two slicers make the
-/// same part?" in deposited-material terms, not as a text diff.
+/// report (per-layer differences, totals, identical flag).
 #[pyfunction]
 #[pyo3(signature = (a, b, resolution_um=200))]
 fn diff_gcode(a: &str, b: &str, resolution_um: i64) -> PyResult<String> {
