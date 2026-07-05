@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.9.0 (2026-07-05)
+
+## [0.9.0](https://github.com/Khushiyant/kerf/compare/v0.8.0...v0.9.0) (2026-07-05)
+
+
+### Features
+
+* RL-readiness toolkit — incremental denote, transforms, E-axis, objectives ([3019a7b](https://github.com/Khushiyant/kerf/commit/3019a7b0139e4dec8d14970a51b464085347c4fb))
+
+
+
 ## v0.8.0 (2026-07-05)
 
 ## [0.8.0](https://github.com/Khushiyant/kerf/compare/v0.7.0...v0.8.0) (2026-07-05)
