@@ -791,7 +791,7 @@ dependencies = [
 
 [[package]]
 name = "kerf-api"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "axum 0.8.9",
  "http-body-util",
@@ -814,14 +814,14 @@ dependencies = [
 
 [[package]]
 name = "kerf-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "kerf-core",
 ]
 
 [[package]]
 name = "kerf-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "proptest",
  "rayon",
@@ -831,7 +831,7 @@ dependencies = [
 
 [[package]]
 name = "kerf-engine"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "kerf-core",
  "serde",
@@ -841,7 +841,7 @@ dependencies = [
 
 [[package]]
 name = "kerf-ingest"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "kerf-queue",
  "kerf-store",
@@ -849,7 +849,7 @@ dependencies = [
 
 [[package]]
 name = "kerf-py"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "kerf-core",
  "pyo3",
@@ -857,11 +857,11 @@ dependencies = [
 
 [[package]]
 name = "kerf-queue"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "kerf-render"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "kerf-core",
  "png",
@@ -869,7 +869,7 @@ dependencies = [
 
 [[package]]
 name = "kerf-store"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "kerf-engine",
  "postgres",
@@ -881,7 +881,7 @@ dependencies = [
 
 [[package]]
 name = "kerf-worker"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "kerf-engine",
  "kerf-queue",
