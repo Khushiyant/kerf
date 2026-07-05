@@ -20,6 +20,8 @@ jobs:
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - name: test
         run: cargo test --workspace --all-features
+      - name: benches compile
+        run: cargo bench --workspace --all-features --no-run
       - name: cli smoke test
         run: |
           cargo run -q -p kerf-cli -- verify examples/sample.gcode

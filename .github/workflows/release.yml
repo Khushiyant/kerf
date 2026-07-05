@@ -130,6 +130,9 @@ jobs:
           pattern: dist-*
           merge-multiple: true
       - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          attestations: false # the attestation step failed the v0.2.0 run; not required for publish
+          skip-existing: true # idempotent: a re-run won't fail on files already uploaded
 
   github-release:
     needs: [version, crates-io, pypi]
