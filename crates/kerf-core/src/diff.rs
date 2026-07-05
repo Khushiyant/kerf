@@ -391,6 +391,7 @@ mod tests {
                     kind: SegmentKind::Extrude(RegionKind::Infill),
                     path: Polyline::new(vec![Point::new(0, y), Point::new(20_000, y)]),
                     width_um,
+                    flow_e: None,
                 }],
             }],
         }

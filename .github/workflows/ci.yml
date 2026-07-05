@@ -22,6 +22,10 @@ jobs:
         run: cargo test --workspace --all-features
       - name: benches compile
         run: cargo bench --workspace --all-features --no-run
+      - name: perf regression gate
+        # A load-bearing latency property: a single-layer re-denote must stay far cheaper than a full
+        # one (the incremental cache). Run in release so the ratio is measured on optimized code.
+        run: cargo test -p kerf-core --release --all-features a_single_layer_re_denote_is_far_cheaper_than_a_full_one
       - name: cli smoke test
         run: |
           cargo run -q -p kerf-cli -- verify examples/sample.gcode
@@ -40,12 +44,12 @@ jobs:
           args: "-p kerf-core"
 
   lean-proofs:
-    name: lean proofs (P1–P4)
+    name: lean proofs (P1–P5)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       # `lake build` runs the Lean kernel over proofs/KerfProofs.lean; success == the unbounded proofs
-      # of P1–P4 check with no `sorry`. See docs/08-semantics.md §5a and proofs/README.md.
+      # of P1–P5 check with no `sorry`. See docs/08-semantics.md §5a and proofs/README.md.
       - uses: leanprover/lean-action@v1
         with:
           lake-package-directory: "proofs"

@@ -20,6 +20,7 @@ pub fn translate(program: &lo::Program, dx: i64, dy: i64) -> lo::Program {
                     .map(|t| lo::Toolpath {
                         kind: t.kind,
                         width_um: t.width_um,
+                        flow_e: t.flow_e,
                         path: Polyline::new(
                             t.path
                                 .points
@@ -59,6 +60,7 @@ pub fn rotate_z(program: &lo::Program, radians: f64) -> lo::Program {
                     .map(|t| lo::Toolpath {
                         kind: t.kind,
                         width_um: t.width_um,
+                        flow_e: t.flow_e,
                         path: Polyline::new(t.path.points.iter().map(rot).collect()),
                     })
                     .collect(),
@@ -114,6 +116,7 @@ mod tests {
                         Point::new(0, 0),
                     ]),
                     width_um: 400,
+                    flow_e: None,
                 }],
             }],
         }
@@ -167,6 +170,7 @@ mod proptests {
                     kind: SegmentKind::Extrude(rk),
                     path: Polyline::new(pts),
                     width_um: w,
+                    flow_e: None,
                 }
             });
         let layer = (0i64..2000, prop::collection::vec(tp, 1..3)).prop_map(|(z, tps)| Layer {

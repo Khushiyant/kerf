@@ -24,14 +24,18 @@ impl SegmentKind {
 }
 
 /// A low-level program: an ordered stack of move-plan layers.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+///
+/// `PartialEq` but not `Eq`: a toolpath carries an optional f64 `flow_e`, so structural equality is
+/// f64-partial. Denotational comparison (the meaningful one) goes through [`crate::denote`], never
+/// `==` on the program.
+#[derive(Clone, Debug, Default, PartialEq)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct Program {
     pub layers: Vec<Layer>,
 }
 
 /// One planar layer at Z (microns): an ordered list of toolpaths.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct Layer {
     pub z_um: i64,
@@ -39,12 +43,45 @@ pub struct Layer {
 }
 
 /// A toolpath: a polyline plus how it is traversed. `width_um` is ignored for `Travel`.
-#[derive(Clone, Debug, PartialEq, Eq)]
+///
+/// `flow_e` is the commanded filament advance (mm of E) for the whole toolpath when known — parsed
+/// from real G-code, it lets the checker see over-/under-extrusion expressed as flow at fixed
+/// geometry, which the geometry-only denotation misses. It is `None` for geometry-only sources
+/// (lowering) and for `Travel`. Serialized only when present and defaulted on read, so adding it
+/// keeps old JSON valid.
+#[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct Toolpath {
     pub kind: SegmentKind,
     pub path: Polyline,
     pub width_um: i64,
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub flow_e: Option<f64>,
+}
+
+impl Toolpath {
+    /// An extruding toolpath with unspecified commanded flow.
+    pub fn extrude(kind: SegmentKind, path: Polyline, width_um: i64) -> Self {
+        Self {
+            kind,
+            path,
+            width_um,
+            flow_e: None,
+        }
+    }
+
+    /// A travel (non-depositing) toolpath.
+    pub fn travel(path: Polyline) -> Self {
+        Self {
+            kind: SegmentKind::Travel,
+            path,
+            width_um: 0,
+            flow_e: None,
+        }
+    }
 }
 
 impl Program {
@@ -88,11 +125,13 @@ mod tests {
                         kind: SegmentKind::Travel,
                         path: p.clone(),
                         width_um: 0,
+                        flow_e: None,
                     },
                     Toolpath {
                         kind: SegmentKind::Extrude(RegionKind::Perimeter),
                         path: p,
                         width_um: 400,
+                        flow_e: None,
                     },
                 ],
             }],

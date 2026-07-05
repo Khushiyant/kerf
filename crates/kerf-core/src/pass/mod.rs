@@ -59,6 +59,7 @@ mod tests {
                     kind: SegmentKind::Extrude(RegionKind::Perimeter),
                     path: Polyline::new(vec![Point::new(0, 0), Point::new(5000, 0)]),
                     width_um: 400,
+                    flow_e: None,
                 }],
             }],
         }
@@ -96,11 +97,13 @@ mod tests {
                         kind: SegmentKind::Extrude(RegionKind::Infill),
                         path: Polyline::new(vec![Point::new(0, 0), Point::new(1000, 0)]),
                         width_um: 400,
+                        flow_e: None,
                     },
                     Toolpath {
                         kind: SegmentKind::Extrude(RegionKind::Infill),
                         path: Polyline::new(vec![Point::new(9000, 9000), Point::new(10_000, 9000)]),
                         width_um: 400,
+                        flow_e: None,
                     },
                 ],
             }],

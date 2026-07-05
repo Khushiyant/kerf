@@ -1,7 +1,10 @@
-//! PyO3 bindings over `kerf-core`. The IR crosses the boundary as JSON (`kerf_core::json`), not as
-//! `#[pyclass]` wrappers, so adding an IR field never touches this file.
+//! PyO3 bindings over `kerf-core`. The IR crosses the boundary as JSON (`kerf_core::json`) for the
+//! stateless functions; the hot loop uses the native [`handle::Program`] instead (no per-step JSON).
 
-use kerf_core::ir::{hi, Area, ExtrudePath, Point, Polyline, RegionKind};
+mod handle;
+
+use kerf_core::ir::{hi, lo, Area, ExtrudePath, Point, Polyline, RegionKind};
+use kerf_core::kinematics::MachineProfile;
 use kerf_core::pass::{Pass, TravelOrder};
 use kerf_core::{backend, denote, frontend, json, lower};
 use pyo3::exceptions::PyValueError;
@@ -355,6 +358,201 @@ fn volume_stats(
     json::to_json(&s).map_err(|e| PyValueError::new_err(e.to_string()))
 }
 
+/// Per-cell commanded flow (mm of E) of a program (JSON), at a resolution — the flow analogue of the
+/// occupancy denotation. Empty when no toolpath specifies E. Serialized as `[[x, y, e], ...]` per layer.
+#[pyfunction]
+#[pyo3(signature = (program_json, resolution_um=200))]
+fn denote_flow(program_json: &str, resolution_um: i64) -> PyResult<String> {
+    let f = kerf_core::flow::denote_lo_flow(&parse_lo(program_json)?, resolution_um);
+    // The flow map's cells are a tuple-keyed map; emit an explicit per-layer array form.
+    let layers: Vec<_> = f
+        .layers
+        .iter()
+        .map(|l| {
+            let cells: Vec<(i64, i64, f64)> =
+                l.cells.iter().map(|(&(x, y), &e)| (x, y, e)).collect();
+            (l.z_um, l.resolution_um, cells)
+        })
+        .collect();
+    json::to_json(&layers).map_err(|e| PyValueError::new_err(e.to_string()))
+}
+
+/// Commanded-flow (E) stats for a program (JSON): total, per-layer, and how many extruding toolpaths
+/// actually specify flow.
+#[pyfunction]
+fn flow_stats(program_json: &str) -> PyResult<String> {
+    json::to_json(&kerf_core::flow::flow_stats(&parse_lo(program_json)?))
+        .map_err(|e| PyValueError::new_err(e.to_string()))
+}
+
+/// Whether two programs (JSON) conserve commanded E within `tolerance_mm` (total and per layer).
+#[pyfunction]
+#[pyo3(signature = (a_json, b_json, tolerance_mm=1e-6))]
+fn e_conserved(a_json: &str, b_json: &str, tolerance_mm: f64) -> PyResult<bool> {
+    Ok(kerf_core::flow::e_conserved(
+        &parse_lo(a_json)?,
+        &parse_lo(b_json)?,
+        tolerance_mm,
+    ))
+}
+
+/// Stable 32-hex-char content hash of a program (JSON): dedup, cache keys, "same program" claims.
+#[pyfunction]
+fn canonical_hash(program_json: &str) -> PyResult<String> {
+    Ok(kerf_core::hash::canonical_hash(&parse_lo(program_json)?))
+}
+
+/// The enumerated legal actions over a program (JSON), returned as a JSON list. Feed one back to
+/// `apply_action` (or a `Program` handle) to edit.
+#[pyfunction]
+fn legal_actions(program_json: &str) -> PyResult<String> {
+    json::to_json(&kerf_core::transform::legal_actions(&parse_lo(
+        program_json,
+    )?))
+    .map_err(|e| PyValueError::new_err(e.to_string()))
+}
+
+/// Apply an action (JSON) to a program (JSON), returning `(new_program_json, touched_layers)`. Raises
+/// on an invalid/inapplicable action.
+#[pyfunction]
+fn apply_action(program_json: &str, action_json: &str) -> PyResult<(String, Vec<usize>)> {
+    let mut prog = parse_lo(program_json)?;
+    let action: kerf_core::transform::Action = json::from_json(action_json)
+        .map_err(|e| PyValueError::new_err(format!("invalid action JSON; {e}")))?;
+    let touched = action
+        .apply(&mut prog)
+        .map_err(|e| PyValueError::new_err(format!("action failed: {e:?}")))?;
+    let out = json::to_json(&prog).map_err(|e| PyValueError::new_err(e.to_string()))?;
+    Ok((out, touched))
+}
+
+/// Kinematics-aware print-time report (JSON) for a program (JSON) under a machine profile (JSON, or
+/// `None` for a default desktop printer).
+#[pyfunction]
+#[pyo3(signature = (program_json, profile_json=None))]
+fn print_time(program_json: &str, profile_json: Option<&str>) -> PyResult<String> {
+    let profile = machine_profile_or_default(profile_json)?;
+    json::to_json(&kerf_core::kinematics::print_time(
+        &parse_lo(program_json)?,
+        &profile,
+    ))
+    .map_err(|e| PyValueError::new_err(e.to_string()))
+}
+
+/// Printability verdict (JSON) for a program (JSON) against a machine profile (JSON or `None`).
+#[pyfunction]
+#[pyo3(signature = (program_json, profile_json=None, resolution_um=200))]
+fn is_printable(
+    program_json: &str,
+    profile_json: Option<&str>,
+    resolution_um: i64,
+) -> PyResult<String> {
+    let profile = machine_profile_or_default(profile_json)?;
+    json::to_json(&kerf_core::printability::is_printable(
+        &parse_lo(program_json)?,
+        &profile,
+        resolution_um,
+    ))
+    .map_err(|e| PyValueError::new_err(e.to_string()))
+}
+
+/// The default machine profile as JSON — a template to edit.
+#[pyfunction]
+fn default_machine_profile() -> PyResult<String> {
+    json::to_json(&MachineProfile::default()).map_err(|e| PyValueError::new_err(e.to_string()))
+}
+
+/// Whether two programs (JSON) deposit the same material within `epsilon_um` (worst nearest-miss).
+#[pyfunction]
+#[pyo3(signature = (a_json, b_json, epsilon_um, resolution_um=200))]
+fn preserves_within(
+    a_json: &str,
+    b_json: &str,
+    epsilon_um: f64,
+    resolution_um: i64,
+) -> PyResult<bool> {
+    Ok(kerf_core::tolerance::preserves_within(
+        &parse_lo(a_json)?,
+        &parse_lo(b_json)?,
+        epsilon_um,
+        resolution_um,
+    ))
+}
+
+/// Verify a batch of candidate programs (list of JSON) against a reference (JSON) by deposited
+/// material, in parallel with the GIL released. Returns one bool per candidate.
+#[pyfunction]
+#[pyo3(signature = (candidates_json, reference_json, resolution_um=200))]
+fn verify_batch(
+    py: Python<'_>,
+    candidates_json: Vec<String>,
+    reference_json: &str,
+    resolution_um: i64,
+) -> PyResult<Vec<bool>> {
+    let reference = parse_lo(reference_json)?;
+    let progs = candidates_json
+        .iter()
+        .map(|s| json::from_json::<lo::Program>(s))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| PyValueError::new_err(format!("invalid candidate program JSON; {e}")))?;
+    Ok(py.allow_threads(|| kerf_core::verify::verify_batch(&progs, &reference, resolution_um)))
+}
+
+/// The per-toolpath feature matrix of a program (JSON): `(rows, cols, flat_row_major)`. Reshape to
+/// `(rows, cols)`; column names are `feature_columns()`.
+#[pyfunction]
+fn feature_matrix(program_json: &str) -> PyResult<(usize, usize, Vec<f64>)> {
+    let (rows, data) = kerf_core::feature::toolpath_feature_matrix(&parse_lo(program_json)?);
+    Ok((rows, kerf_core::feature::FEATURE_COLUMNS.len(), data))
+}
+
+/// Dense 0/1 occupancy raster for one layer of a program (JSON): `(rows, cols, min_i, min_j, bytes)`.
+#[pyfunction]
+#[pyo3(signature = (program_json, layer, resolution_um=200))]
+fn occupancy_grid(
+    program_json: &str,
+    layer: usize,
+    resolution_um: i64,
+) -> PyResult<(usize, usize, i64, i64, Vec<u8>)> {
+    let grids = kerf_core::feature::occupancy_grid(&parse_lo(program_json)?, resolution_um);
+    let g = grids
+        .get(layer)
+        .ok_or_else(|| PyValueError::new_err("layer index out of range"))?;
+    Ok((g.rows, g.cols, g.min_i, g.min_j, g.data.clone()))
+}
+
+/// The travel graph (JSON) of a program (JSON): toolpath centroids as nodes, within-layer hops as
+/// weighted edges.
+#[pyfunction]
+fn travel_graph(program_json: &str) -> PyResult<String> {
+    json::to_json(&kerf_core::feature::travel_graph(&parse_lo(program_json)?))
+        .map_err(|e| PyValueError::new_err(e.to_string()))
+}
+
+/// Serialize a program (JSON) into a versioned, persistable artifact (adds a schema-version tag).
+#[pyfunction]
+fn export_versioned(lo_program_json: &str) -> PyResult<String> {
+    kerf_core::schema::export_lo(&parse_lo(lo_program_json)?)
+        .map_err(|e| PyValueError::new_err(e.to_string()))
+}
+
+/// Load a versioned artifact (from `export_versioned`) back to a program (JSON), failing loudly on a
+/// schema-version or kind mismatch.
+#[pyfunction]
+fn import_versioned(versioned_json: &str) -> PyResult<String> {
+    let prog = kerf_core::schema::import_lo(versioned_json)
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    json::to_json(&prog).map_err(|e| PyValueError::new_err(e.to_string()))
+}
+
+fn machine_profile_or_default(profile_json: Option<&str>) -> PyResult<MachineProfile> {
+    match profile_json {
+        None => Ok(MachineProfile::default()),
+        Some(s) => json::from_json(s)
+            .map_err(|e| PyValueError::new_err(format!("invalid MachineProfile JSON; {e}"))),
+    }
+}
+
 /// The kerf-core crate version.
 #[pyfunction]
 fn version() -> &'static str {
@@ -389,6 +587,30 @@ fn _kerf(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(deposit_stats, m)?)?;
     m.add_function(wrap_pyfunction!(travel_collisions, m)?)?;
     m.add_function(wrap_pyfunction!(volume_stats, m)?)?;
+    // E-axis (commanded flow)
+    m.add_function(wrap_pyfunction!(denote_flow, m)?)?;
+    m.add_function(wrap_pyfunction!(flow_stats, m)?)?;
+    m.add_function(wrap_pyfunction!(e_conserved, m)?)?;
+    // transform actions
+    m.add_function(wrap_pyfunction!(legal_actions, m)?)?;
+    m.add_function(wrap_pyfunction!(apply_action, m)?)?;
+    // objectives + gates
+    m.add_function(wrap_pyfunction!(print_time, m)?)?;
+    m.add_function(wrap_pyfunction!(is_printable, m)?)?;
+    m.add_function(wrap_pyfunction!(default_machine_profile, m)?)?;
+    m.add_function(wrap_pyfunction!(preserves_within, m)?)?;
+    m.add_function(wrap_pyfunction!(verify_batch, m)?)?;
+    m.add_function(wrap_pyfunction!(canonical_hash, m)?)?;
+    // featurization
+    m.add_function(wrap_pyfunction!(feature_matrix, m)?)?;
+    m.add_function(wrap_pyfunction!(occupancy_grid, m)?)?;
+    m.add_function(wrap_pyfunction!(travel_graph, m)?)?;
+    m.add_function(wrap_pyfunction!(handle::feature_columns, m)?)?;
+    // versioned persistence
+    m.add_function(wrap_pyfunction!(export_versioned, m)?)?;
+    m.add_function(wrap_pyfunction!(import_versioned, m)?)?;
+    // stateful native handle (hot-loop API)
+    m.add_class::<handle::Program>()?;
     // demos
     m.add_function(wrap_pyfunction!(demo_square_gcode, m)?)?;
     m.add_function(wrap_pyfunction!(demo_self_lowering_sound, m)?)?;

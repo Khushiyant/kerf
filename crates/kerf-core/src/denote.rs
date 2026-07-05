@@ -289,18 +289,25 @@ where
     layers.iter().map(f).collect()
 }
 
+/// Denote a single low-level layer: the union of its extruding toolpaths' swept material. This is the
+/// unit of work an incremental denote ([`crate::incremental::DenoteCache`]) recomputes when one layer
+/// changes — the whole-program [`denote_lo`] is exactly this mapped over the layers.
+pub fn denote_lo_layer(layer: &lo::Layer, resolution_um: i64) -> LayerOccupancy {
+    let paths: Vec<(&Polyline, i64)> = layer
+        .toolpaths
+        .iter()
+        .filter(|t| t.kind.extrudes())
+        .map(|t| (&t.path, t.width_um))
+        .collect();
+    occupancy_of(&paths, layer.z_um, resolution_um)
+}
+
 /// Denote a low-level program: union the swept material of every extruding toolpath, per layer.
 /// Travel contributes nothing.
 pub fn denote_lo(program: &lo::Program, resolution_um: i64) -> Occupancy {
     Occupancy {
         layers: map_layers(&program.layers, |layer| {
-            let paths: Vec<(&Polyline, i64)> = layer
-                .toolpaths
-                .iter()
-                .filter(|t| t.kind.extrudes())
-                .map(|t| (&t.path, t.width_um))
-                .collect();
-            occupancy_of(&paths, layer.z_um, resolution_um)
+            denote_lo_layer(layer, resolution_um)
         }),
     }
 }

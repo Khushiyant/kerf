@@ -90,16 +90,27 @@ pub fn to_gcode_with(program: &Program, opts: &GcodeOptions) -> String {
                         retracted = false;
                     }
                     let w_mm = tp.width_um as f64 / 1000.0;
+                    // When the toolpath carries commanded flow (parsed from real G-code), emit that E
+                    // total distributed by segment length, so re-parsing recovers the same E. Else
+                    // fall back to the geometric volumetric model.
+                    let total_len_mm: f64 = pts
+                        .windows(2)
+                        .map(|s| {
+                            let dx = (s[1].x - s[0].x) as f64 / 1000.0;
+                            let dy = (s[1].y - s[0].y) as f64 / 1000.0;
+                            (dx * dx + dy * dy).sqrt()
+                        })
+                        .sum();
                     let mut first_seg = true;
                     for p in pts.iter().skip(1) {
                         let (px, py) = cur.unwrap_or(start);
                         let dx = (p.x - px) as f64 / 1000.0;
                         let dy = (p.y - py) as f64 / 1000.0;
                         let len = (dx * dx + dy * dy).sqrt();
-                        let e = if filament_area > 0.0 {
-                            w_mm * h_mm * len / filament_area
-                        } else {
-                            0.0
+                        let e = match tp.flow_e {
+                            Some(total) if total_len_mm > 0.0 => total * (len / total_len_mm),
+                            _ if filament_area > 0.0 => w_mm * h_mm * len / filament_area,
+                            _ => 0.0,
                         };
                         let f = if first_seg && opts.print_feedrate > 0 {
                             format!(" F{}", opts.print_feedrate)
@@ -175,6 +186,7 @@ mod tests {
                     kind: SegmentKind::Extrude(RegionKind::Perimeter),
                     path: square,
                     width_um: 400,
+                    flow_e: None,
                 }],
             }],
         };

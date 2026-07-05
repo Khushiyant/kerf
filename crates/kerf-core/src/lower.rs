@@ -21,19 +21,16 @@ pub fn lower(program: &hi::Program) -> lo::Program {
 
                 if let Some(prev) = last_end {
                     if prev != start {
-                        toolpaths.push(lo::Toolpath {
-                            kind: SegmentKind::Travel,
-                            path: Polyline::new(vec![prev, start]),
-                            width_um: 0,
-                        });
+                        toolpaths.push(lo::Toolpath::travel(Polyline::new(vec![prev, start])));
                     }
                 }
 
-                toolpaths.push(lo::Toolpath {
-                    kind: SegmentKind::Extrude(region.kind),
-                    path: fill.path.clone(),
-                    width_um: fill.width_um,
-                });
+                // Geometry-only source: commanded flow (E) is unknown at lowering time.
+                toolpaths.push(lo::Toolpath::extrude(
+                    SegmentKind::Extrude(region.kind),
+                    fill.path.clone(),
+                    fill.width_um,
+                ));
                 last_end = fill.path.points.last().copied();
             }
         }

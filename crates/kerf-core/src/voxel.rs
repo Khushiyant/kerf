@@ -212,6 +212,7 @@ mod tests {
                         Point::new(0, 0),
                     ]),
                     width_um: 400,
+                    flow_e: None,
                 }],
             }],
         }

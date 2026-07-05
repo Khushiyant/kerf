@@ -198,6 +198,7 @@ mod tests {
             kind: SegmentKind::Extrude(RegionKind::Infill),
             path: Polyline::new(pts),
             width_um: 400,
+            flow_e: None,
         }
     }
     fn travel(pts: Vec<Point>) -> Toolpath {
@@ -205,6 +206,7 @@ mod tests {
             kind: SegmentKind::Travel,
             path: Polyline::new(pts),
             width_um: 0,
+            flow_e: None,
         }
     }
 
@@ -263,6 +265,7 @@ mod tests {
                     kind: SegmentKind::Extrude(RegionKind::Infill),
                     path: Polyline::new(vec![Point::new(0, 0), Point::new(20_000, 0)]),
                     width_um: w,
+                    flow_e: None,
                 }],
             }],
         };

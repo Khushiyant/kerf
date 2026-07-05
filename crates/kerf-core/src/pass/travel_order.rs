@@ -5,7 +5,7 @@
 //! only because [`crate::denote`] canonicalizes segment endpoints and is reversal-invariant.
 
 use super::Pass;
-use crate::ir::lo::{self, SegmentKind, Toolpath};
+use crate::ir::lo::{self, Toolpath};
 use crate::ir::{Point, Polyline};
 
 /// Reorders each layer's extruding toolpaths to reduce travel distance.
@@ -100,11 +100,7 @@ impl Pass for TravelOrder {
                 };
                 if let Some(prev) = last_end {
                     if prev != start {
-                        toolpaths.push(Toolpath {
-                            kind: SegmentKind::Travel,
-                            path: Polyline::new(vec![prev, start]),
-                            width_um: 0,
-                        });
+                        toolpaths.push(Toolpath::travel(Polyline::new(vec![prev, start])));
                     }
                 }
                 last_end = tp.path.points.last().copied();
@@ -177,7 +173,7 @@ mod tests {
 #[cfg(test)]
 mod proptests {
     use super::*;
-    use crate::ir::lo::{Layer, Toolpath};
+    use crate::ir::lo::{Layer, SegmentKind, Toolpath};
     use crate::ir::RegionKind;
     use crate::pass::{preserves_denotation, preserves_deposit};
     use proptest::prelude::*;
@@ -203,6 +199,7 @@ mod proptests {
                 kind: SegmentKind::Extrude(role),
                 path: Polyline::new(pts),
                 width_um,
+                flow_e: None,
             })
     }
     fn arb_layer() -> impl Strategy<Value = Layer> {

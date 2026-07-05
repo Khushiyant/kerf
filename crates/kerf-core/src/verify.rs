@@ -111,6 +111,38 @@ pub fn verify_roundtrip(program: &lo::Program, resolution_um: i64) -> RoundTrip 
     }
 }
 
+/// Verify a batch of candidate programs against one reference, by deposited material at
+/// `resolution_um`: returns one bool per candidate (does it denote the same occupancy as the
+/// reference?). The reference is denoted once; the candidates fan out across cores. This is the shape
+/// population-based search and batched rollouts need, and it also speeds plain parameter sweeps. From
+/// Python the GIL is released around it, so it is genuinely parallel.
+pub fn verify_batch(
+    candidates: &[lo::Program],
+    reference: &lo::Program,
+    resolution_um: i64,
+) -> Vec<bool> {
+    let target = denote_lo(reference, resolution_um);
+    map_candidates(candidates, |c| denote_lo(c, resolution_um) == target)
+}
+
+/// Fan the per-candidate check out across cores off Kani (which needs a single-threaded build).
+#[cfg(not(kani))]
+fn map_candidates<F>(items: &[lo::Program], f: F) -> Vec<bool>
+where
+    F: Fn(&lo::Program) -> bool + Sync + Send,
+{
+    use rayon::prelude::*;
+    items.par_iter().map(f).collect()
+}
+
+#[cfg(kani)]
+fn map_candidates<F>(items: &[lo::Program], f: F) -> Vec<bool>
+where
+    F: Fn(&lo::Program) -> bool,
+{
+    items.iter().map(f).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -233,11 +265,35 @@ mod tests {
                     kind: SegmentKind::Travel,
                     path: Polyline::new(vec![Point::new(0, 0), Point::new(1000, 0)]),
                     width_um: 0,
+                    flow_e: None,
                 }],
             }],
         };
         let rt = verify_roundtrip(&travel_only, 200);
         assert!(!rt.has_geometry);
         assert!(!rt.ok());
+    }
+
+    #[test]
+    fn verify_batch_flags_matches_and_mismatches() {
+        use crate::ir::lo::{Layer, SegmentKind, Toolpath};
+        use crate::ir::{Point, Polyline, RegionKind};
+        let line = |y: i64| lo::Program {
+            layers: vec![Layer {
+                z_um: 200,
+                toolpaths: vec![Toolpath::extrude(
+                    SegmentKind::Extrude(RegionKind::Perimeter),
+                    Polyline::new(vec![Point::new(0, y), Point::new(40_000, y)]),
+                    400,
+                )],
+            }],
+        };
+        let reference = line(0);
+        let candidates = vec![line(0), line(10_000), line(0)];
+        assert_eq!(
+            verify_batch(&candidates, &reference, 200),
+            vec![true, false, true]
+        );
+        assert!(verify_batch(&[], &reference, 200).is_empty());
     }
 }

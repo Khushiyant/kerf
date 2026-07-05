@@ -87,6 +87,7 @@ struct CurTp {
     width_um: i64,
     epoch: u64,
     points: Vec<Point>,
+    flow_e: f64, // accumulated commanded E (mm) over this toolpath's segments
 }
 
 struct OpenLayer {
@@ -419,15 +420,19 @@ impl Parser {
             let width = self.width_for(de, polyline_len_mm(prev, &run));
             let role = self.consume_role();
             let kind = SegmentKind::Extrude(role);
+            // The whole arc's E is attributed once to the run's toolpath (via the first chord); the
+            // remaining chords continue the same toolpath and add nothing, so the total is exact.
             let mut rp = prev;
+            let mut first = true;
             for p in run {
-                self.push_segment(kind, width, rp, p);
+                self.push_segment(kind, width, rp, p, if first { de } else { 0.0 });
+                first = false;
                 rp = p;
             }
         } else if self.open.is_some() {
             let mut rp = prev;
             for p in run {
-                self.push_segment(SegmentKind::Travel, 0, rp, p);
+                self.push_segment(SegmentKind::Travel, 0, rp, p, 0.0);
                 rp = p;
             }
         }
@@ -471,12 +476,12 @@ impl Parser {
             self.open_layer(nz);
             let width = self.width_for(de, len_mm);
             let role = self.consume_role();
-            self.push_segment(SegmentKind::Extrude(role), width, prev, target);
+            self.push_segment(SegmentKind::Extrude(role), width, prev, target, de);
         } else if de > EPS_MM {
             // Extruding but no XY move (prime / unretract): advance state, emit nothing.
             self.diag.zero_length_extrudes += 1;
         } else if !same_point && self.open.is_some() {
-            self.push_segment(SegmentKind::Travel, 0, prev, target);
+            self.push_segment(SegmentKind::Travel, 0, prev, target, 0.0);
         }
 
         self.x = nx;
@@ -524,7 +529,14 @@ impl Parser {
         }
     }
 
-    fn push_segment(&mut self, kind: SegmentKind, width_um: i64, prev: Point, target: Point) {
+    fn push_segment(
+        &mut self,
+        kind: SegmentKind,
+        width_um: i64,
+        prev: Point,
+        target: Point,
+        de_mm: f64,
+    ) {
         let epoch = if matches!(kind, SegmentKind::Travel) {
             0
         } else {
@@ -540,7 +552,9 @@ impl Parser {
             None => false,
         };
         if continues {
-            layer.cur.as_mut().unwrap().points.push(target);
+            let c = layer.cur.as_mut().unwrap();
+            c.points.push(target);
+            c.flow_e += de_mm;
         } else {
             if let Some(c) = layer.cur.take() {
                 layer.toolpaths.push(finish_tp(c));
@@ -550,6 +564,7 @@ impl Parser {
                 width_um,
                 epoch,
                 points: vec![prev, target],
+                flow_e: de_mm,
             });
         }
     }
@@ -590,6 +605,8 @@ fn finish_tp(c: CurTp) -> Toolpath {
         kind: c.kind,
         path: Polyline::new(c.points),
         width_um: c.width_um,
+        // Commanded flow is meaningful only for extruding paths; travel carries none.
+        flow_e: c.kind.extrudes().then_some(c.flow_e),
     }
 }
 
