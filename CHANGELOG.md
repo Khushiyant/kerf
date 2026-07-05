@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.8.0 (2026-07-05)
+
+## [0.8.0](https://github.com/Khushiyant/kerf/compare/v0.7.0...v0.8.0) (2026-07-05)
+
+
+### Features
+
+* **voxel:** union-coverage inner bound, Python rotation API, Lean Z-90 proof ([90a52cd](https://github.com/Khushiyant/kerf/commit/90a52cdf96593423259d037cb77af1bd0aab7741))
+
+
+
 ## v0.7.0 (2026-07-05)
 
 ## [0.7.0](https://github.com/Khushiyant/kerf/compare/v0.6.0...v0.7.0) (2026-07-05)
