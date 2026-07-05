@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.7.0 (2026-07-05)
+
+## [0.7.0](https://github.com/Khushiyant/kerf/compare/v0.6.0...v0.7.0) (2026-07-05)
+
+
+### Features
+
+* **core:** rotation-aware comparison (Z-rotation, voxels + 90-deg, bounded rotation) ([8e44ab0](https://github.com/Khushiyant/kerf/commit/8e44ab0a60f9fbb3af53d2fabec5fc54c0c6951b))
+
+
+
 ## v0.6.0 (2026-07-05)
 
 ## [0.6.0](https://github.com/Khushiyant/kerf/compare/v0.5.1...v0.6.0) (2026-07-05)
