@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "pykerf"
-version = "0.5.0"
+version = "0.5.1"
 description = "Verify and diff 3D-printer G-code by the material it deposits — an open, checkable IR for the mesh-to-G-code half of the fabrication pipeline."
 readme = "README.md"
 license = "MIT OR Apache-2.0"
