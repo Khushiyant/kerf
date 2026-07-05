@@ -28,7 +28,10 @@ pub use denote::{
     polyline_cells, self_lowering_sound, Deposit, LayerDeposit, LayerOccupancy, LayerVolume,
     Occupancy, Volume,
 };
-pub use diff::{diff_gcode, diff_programs, GcodeDiff, LayerDiff};
+pub use diff::{
+    diff_gcode, diff_programs, graded_diff_gcode, graded_diff_programs, GcodeDiff, GradedDiff,
+    LayerDiff, LayerGradedDiff,
+};
 pub use frontend::{parse, ParseReport};
 pub use ir::{hi, lo, Area, ExtrudePath, Point, Polyline, RegionKind};
 pub use metamorphic::{translate, translation_invariant};

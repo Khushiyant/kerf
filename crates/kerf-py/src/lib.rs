@@ -225,6 +225,29 @@ fn travel_collisions(program_json: &str, resolution_um: i64) -> PyResult<String>
     json::to_json(&s).map_err(|e| PyValueError::new_err(e.to_string()))
 }
 
+/// Graded (distance-based) difference of two LOW-LEVEL programs (JSON): for each cell one deposits
+/// and the other does not, the Euclidean distance (microns) to the nearest cell of the other, as
+/// mean/p95/max per layer and overall. Unlike IoU it stays informative when the two are disjoint (a
+/// near miss scores small) — a smooth reward signal and the basis for rotation-aware comparison.
+#[pyfunction]
+#[pyo3(signature = (a_json, b_json, resolution_um=200))]
+fn graded_diff(a_json: &str, b_json: &str, resolution_um: i64) -> PyResult<String> {
+    let d = kerf_core::diff::graded_diff_programs(
+        &parse_lo(a_json)?,
+        &parse_lo(b_json)?,
+        resolution_um,
+    );
+    json::to_json(&d).map_err(|e| PyValueError::new_err(e.to_string()))
+}
+
+/// Graded (distance-based) difference of two G-code files. See `graded_diff`.
+#[pyfunction]
+#[pyo3(signature = (a, b, resolution_um=200))]
+fn graded_diff_gcode(a: &str, b: &str, resolution_um: i64) -> PyResult<String> {
+    let d = kerf_core::diff::graded_diff_gcode(a, b, resolution_um);
+    json::to_json(&d).map_err(|e| PyValueError::new_err(e.to_string()))
+}
+
 /// Deposited melt volume (mm³) of a program (JSON): total and per-layer. Moves with bead width, so it
 /// surfaces over-/under-extrusion that coverage and path-count miss (geometry only, not commanded
 /// flow). Layer height is derived from consecutive Z unless `layer_height_um` is given.
@@ -259,6 +282,8 @@ fn _kerf(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(verify_roundtrip, m)?)?;
     m.add_function(wrap_pyfunction!(diff_gcode, m)?)?;
     m.add_function(wrap_pyfunction!(diff_programs, m)?)?;
+    m.add_function(wrap_pyfunction!(graded_diff, m)?)?;
+    m.add_function(wrap_pyfunction!(graded_diff_gcode, m)?)?;
     // analyses
     m.add_function(wrap_pyfunction!(occupancy, m)?)?;
     m.add_function(wrap_pyfunction!(program_stats, m)?)?;
