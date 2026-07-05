@@ -14,8 +14,8 @@ Every push to `main` runs `.github/workflows/release.yml`, which:
    `kerf-cli` → `kerf-core` pin and `Cargo.lock`, prepends the changelog, commits it back as
    `chore(release): vX.Y.Z [skip ci]`, and creates the `vX.Y.Z` tag.
 3. Publishes in the same run: **crates.io** (`kerf-core` then `kerf-cli`), **PyPI** (`pykerf` abi3
-   wheels for Linux/macOS/Windows + sdist, via Trusted Publishing), **GHCR**
-   (`ghcr.io/khushiyant/kerf`), and a **GitHub Release** with generated notes.
+   wheels for Linux/macOS/Windows + sdist, via Trusted Publishing), and a **GitHub Release** with
+   generated notes.
 
 Just write conventional commits. The version bumps and publishes itself.
 

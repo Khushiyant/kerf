@@ -18,9 +18,6 @@ cargo install kerf-cli
 
 # Python (CPython ≥ 3.12)
 pip install pykerf
-
-# Server + dashboard
-docker run -p 8080:8080 ghcr.io/khushiyant/kerf
 ```
 
 ## Quickstart
@@ -72,7 +69,6 @@ assert r["has_geometry"] and r["pass_preserves_denotation"] and r["translation_i
 crates/kerf-core   IR, lowering, denote, passes, G-code frontend, verify/diff
 crates/kerf-cli    the `kerf` binary
 crates/kerf-py     PyO3 bindings (published to PyPI as pykerf)
-crates/kerf-{api,engine,store,queue,worker,ingest,render}   verification service + dashboard
 proofs/            Lean 4 proofs of P1–P4
 docs/              design record and semantics
 ```
