@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.9.1 (2026-07-05)
+
+### [0.9.1](https://github.com/Khushiyant/kerf/compare/v0.9.0...v0.9.1) (2026-07-05)
+
+
+### Bug Fixes
+
+* canonical-hash canonicity, exact transforms, and flow round-trip ([daf8628](https://github.com/Khushiyant/kerf/commit/daf86289ae3374c2894aa92c53f849dc40104e5c))
+
+
+
 ## v0.9.0 (2026-07-05)
 
 ## [0.9.0](https://github.com/Khushiyant/kerf/compare/v0.8.0...v0.9.0) (2026-07-05)

@@ -17,4 +17,4 @@ name = "kerf"
 path = "src/main.rs"
 
 [dependencies]
-kerf-core = { path = "../kerf-core", version = "0.9.0", features = ["serde"] }
+kerf-core = { path = "../kerf-core", version = "0.9.1", features = ["serde"] }
