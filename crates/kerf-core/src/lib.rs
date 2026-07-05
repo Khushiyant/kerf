@@ -19,7 +19,7 @@ pub mod verify;
 
 pub use backend::{to_gcode, to_gcode_with, GcodeOptions};
 pub use denote::{denote_hi, denote_lo, self_lowering_sound, LayerOccupancy, Occupancy};
-pub use diff::{diff_gcode, GcodeDiff, LayerDiff};
+pub use diff::{diff_gcode, diff_programs, GcodeDiff, LayerDiff};
 pub use frontend::{parse, ParseReport};
 pub use ir::{hi, lo, Area, ExtrudePath, Point, Polyline, RegionKind};
 pub use metamorphic::{translate, translation_invariant};

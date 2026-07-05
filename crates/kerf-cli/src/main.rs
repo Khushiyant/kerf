@@ -211,7 +211,7 @@ fn cmd_diff(a: &str, b: &str, resolution_um: i64, json_out: bool) -> Result<Exit
         println!("  cells only in A:   {}", d.total_only_in_a);
         println!("  cells only in B:   {}", d.total_only_in_b);
         println!("  cells shared:      {}", d.total_shared);
-        match d.iou() {
+        match d.iou {
             Some(iou) => println!("  similarity (IoU):  {iou:.4}"),
             None => println!("  similarity (IoU):  n/a (both empty)"),
         }

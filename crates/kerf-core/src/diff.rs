@@ -1,12 +1,14 @@
-//! Differential comparison of two G-code files by what they physically deposit.
+//! Differential comparison of two programs (or G-code files) by what they physically deposit.
 //!
-//! Both files are parsed and denoted to per-layer material occupancy, then compared matched by
-//! layer height (Z), not by line order, up to the raster resolution.
+//! Each side is denoted to per-layer material occupancy, then compared matched by layer height (Z),
+//! not by line order, up to the raster resolution — yielding a scalar IoU similarity and a per-layer
+//! breakdown.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::denote::denote_lo;
 use crate::frontend::parse;
+use crate::ir::lo;
 
 #[cfg(feature = "serde")]
 use serde::Serialize;
@@ -22,48 +24,44 @@ pub struct LayerDiff {
     pub shared: usize,
 }
 
-/// The result of diffing two G-code files' deposited material.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// The result of diffing two programs' (or files') deposited material.
+#[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(Serialize))]
 pub struct GcodeDiff {
     pub resolution_um: i64,
-    /// True iff the two files deposit the same material at every layer (up to resolution). Trivially
-    /// true when both files are empty; check [`GcodeDiff::both_empty`] first.
+    /// True iff the two inputs deposit the same material at every layer (up to resolution). Trivially
+    /// true when both are empty; check [`GcodeDiff::both_empty`] first.
     pub identical: bool,
-    /// True iff neither file yielded deposited material. `identical` is only meaningful when false.
+    /// True iff neither input yielded deposited material. `identical` is only meaningful when false.
     pub both_empty: bool,
+    /// Intersection-over-union of the deposited material: 1.0 = identical, 0.0 = disjoint; `None` when
+    /// both inputs are empty (nothing to compare). A single scalar similarity score.
+    pub iou: Option<f64>,
     pub total_only_in_a: usize,
     pub total_only_in_b: usize,
     pub total_shared: usize,
     pub layers: Vec<LayerDiff>,
 }
 
-impl GcodeDiff {
-    /// Intersection-over-union of the deposited material: 1.0 = identical, 0.0 = disjoint. `None` if
-    /// both files are empty (nothing to compare).
-    pub fn iou(&self) -> Option<f64> {
-        let union = self.total_shared + self.total_only_in_a + self.total_only_in_b;
-        (union > 0).then(|| self.total_shared as f64 / union as f64)
-    }
-}
-
-fn occupancy_by_z(gcode: &str, resolution_um: i64) -> BTreeMap<i64, BTreeSet<(i64, i64)>> {
-    let program = parse(gcode).program;
+/// Group a program's occupied cells by layer height at a chosen resolution.
+fn occupancy_by_z(
+    program: &lo::Program,
+    resolution_um: i64,
+) -> BTreeMap<i64, BTreeSet<(i64, i64)>> {
     let mut by_z: BTreeMap<i64, BTreeSet<(i64, i64)>> = BTreeMap::new();
-    for layer in denote_lo(&program, resolution_um).layers {
+    for layer in denote_lo(program, resolution_um).layers {
         by_z.entry(layer.z_um).or_default().extend(layer.cells);
     }
     by_z
 }
 
-/// Compare two G-code files by deposited material, at a chosen raster resolution.
-pub fn diff_gcode(a: &str, b: &str, resolution_um: i64) -> GcodeDiff {
-    let (a, b) = (
-        occupancy_by_z(a, resolution_um),
-        occupancy_by_z(b, resolution_um),
-    );
+/// Compare two occupancy-by-layer maps into a material diff.
+fn diff_occupancy(
+    a: BTreeMap<i64, BTreeSet<(i64, i64)>>,
+    b: BTreeMap<i64, BTreeSet<(i64, i64)>>,
+    resolution_um: i64,
+) -> GcodeDiff {
     let heights: BTreeSet<i64> = a.keys().chain(b.keys()).copied().collect();
-
     let empty = BTreeSet::new();
     let (mut ta, mut tb, mut ts) = (0usize, 0usize, 0usize);
     let mut layers = Vec::new();
@@ -83,16 +81,33 @@ pub fn diff_gcode(a: &str, b: &str, resolution_um: i64) -> GcodeDiff {
             shared,
         });
     }
-
+    let union = ts + ta + tb;
     GcodeDiff {
         resolution_um,
         identical: ta == 0 && tb == 0,
-        both_empty: ta == 0 && tb == 0 && ts == 0,
+        both_empty: union == 0,
+        iou: (union > 0).then(|| ts as f64 / union as f64),
         total_only_in_a: ta,
         total_only_in_b: tb,
         total_shared: ts,
         layers,
     }
+}
+
+/// Compare two low-level programs by the material they deposit, at a chosen raster resolution.
+/// Works on any move plans — parsed, lowered, optimizer output, or generated — and yields a scalar
+/// [`GcodeDiff::iou`] similarity plus a per-layer breakdown.
+pub fn diff_programs(a: &lo::Program, b: &lo::Program, resolution_um: i64) -> GcodeDiff {
+    diff_occupancy(
+        occupancy_by_z(a, resolution_um),
+        occupancy_by_z(b, resolution_um),
+        resolution_um,
+    )
+}
+
+/// Compare two G-code files by deposited material, at a chosen raster resolution.
+pub fn diff_gcode(a: &str, b: &str, resolution_um: i64) -> GcodeDiff {
+    diff_programs(&parse(a).program, &parse(b).program, resolution_um)
 }
 
 #[cfg(test)]
@@ -106,7 +121,7 @@ mod tests {
         let d = diff_gcode(A, A, 200);
         assert!(d.identical);
         assert!(!d.both_empty);
-        assert_eq!(d.iou(), Some(1.0));
+        assert_eq!(d.iou, Some(1.0));
         assert_eq!(d.total_only_in_a, 0);
         assert_eq!(d.total_only_in_b, 0);
     }
@@ -115,7 +130,7 @@ mod tests {
     fn two_empty_files_are_flagged_both_empty_not_a_real_match() {
         let d = diff_gcode("M104 S200\nG28\n", ";just comments\n", 200);
         assert!(d.both_empty);
-        assert_eq!(d.iou(), None);
+        assert_eq!(d.iou, None);
     }
 
     #[test]
@@ -124,7 +139,19 @@ mod tests {
         let d = diff_gcode(A, b, 200);
         assert!(!d.identical);
         assert!(d.total_only_in_a > 0 && d.total_only_in_b > 0);
-        assert!(d.iou().unwrap() < 0.5);
+        assert!(d.iou.unwrap() < 0.5);
+    }
+
+    #[test]
+    fn diff_programs_matches_diff_gcode_and_scores_a_pass() {
+        use crate::pass::{Pass, TravelOrder};
+        let prog = parse(A).program;
+        // A program is identical to itself, and a reorder pass preserves material (IoU 1.0).
+        assert_eq!(diff_programs(&prog, &prog, 200).iou, Some(1.0));
+        let reordered = TravelOrder::default().run(prog.clone());
+        assert_eq!(diff_programs(&prog, &reordered, 200).iou, Some(1.0));
+        // diff_programs on the parsed programs agrees with diff_gcode on the strings.
+        assert_eq!(diff_programs(&prog, &prog, 200), diff_gcode(A, A, 200));
     }
 
     #[test]

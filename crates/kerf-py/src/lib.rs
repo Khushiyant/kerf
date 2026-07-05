@@ -161,6 +161,21 @@ fn verify_roundtrip(program_json: &str, resolution_um: i64) -> PyResult<String> 
     json::to_json(&rt).map_err(|e| PyValueError::new_err(e.to_string()))
 }
 
+/// Compare two low-level programs (JSON, as from `lower_to_json`) by the material they deposit.
+/// Returns a JSON report including a scalar `iou` similarity (1.0 identical, 0.0 disjoint, null if
+/// both empty) and a per-layer breakdown. General-purpose: regression tests, optimizer/agent scoring,
+/// or comparing any two move plans without going through G-code text.
+#[pyfunction]
+#[pyo3(signature = (a_json, b_json, resolution_um=200))]
+fn diff_programs(a_json: &str, b_json: &str, resolution_um: i64) -> PyResult<String> {
+    let a: kerf_core::ir::lo::Program = json::from_json(a_json)
+        .map_err(|e| PyValueError::new_err(format!("invalid low-level program JSON (a): {e}")))?;
+    let b: kerf_core::ir::lo::Program = json::from_json(b_json)
+        .map_err(|e| PyValueError::new_err(format!("invalid low-level program JSON (b): {e}")))?;
+    let d = kerf_core::diff_programs(&a, &b, resolution_um);
+    json::to_json(&d).map_err(|e| PyValueError::new_err(e.to_string()))
+}
+
 /// The kerf-core crate version.
 #[pyfunction]
 fn version() -> &'static str {
@@ -179,6 +194,7 @@ fn _kerf(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(verify_gcode, m)?)?;
     m.add_function(wrap_pyfunction!(verify_roundtrip, m)?)?;
     m.add_function(wrap_pyfunction!(diff_gcode, m)?)?;
+    m.add_function(wrap_pyfunction!(diff_programs, m)?)?;
     // demos
     m.add_function(wrap_pyfunction!(demo_square_gcode, m)?)?;
     m.add_function(wrap_pyfunction!(demo_self_lowering_sound, m)?)?;
