@@ -24,4 +24,4 @@ pub use frontend::{parse, ParseReport};
 pub use ir::{hi, lo, Area, ExtrudePath, Point, Polyline, RegionKind};
 pub use metamorphic::{translate, translation_invariant};
 pub use pass::{preserves_denotation, Identity, Pass, TravelOrder};
-pub use verify::{verify_gcode, GcodeVerification};
+pub use verify::{verify_gcode, verify_roundtrip, GcodeVerification, RoundTrip};

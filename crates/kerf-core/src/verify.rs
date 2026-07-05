@@ -3,7 +3,10 @@
 //! raster resolution. A verdict requires recovered geometry, so an unextractable file never reads
 //! as sound.
 
+use crate::backend::to_gcode;
+use crate::denote::{denote_lo, denote_lo_deposit};
 use crate::frontend::{parse, Diagnostics};
+use crate::ir::lo;
 use crate::metamorphic::translation_invariant;
 use crate::pass::{preserves_denotation, preserves_deposit, TravelOrder};
 
@@ -54,6 +57,57 @@ pub fn verify_gcode(gcode: &str, resolution_um: i64) -> GcodeVerification {
         translation_invariant: translation_invariant(prog, 3, 5, resolution_um),
         resolution_um,
         diagnostics: report.diagnostics,
+    }
+}
+
+/// The result of a round-trip check: does emitting a move plan to G-code and re-parsing it recover
+/// the same deposited material?
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Serialize))]
+pub struct RoundTrip {
+    pub resolution_um: i64,
+    /// Whether the input program has any extruding geometry. If false the check is vacuous and
+    /// [`RoundTrip::ok`] is not satisfied.
+    pub has_geometry: bool,
+    /// The emitted-then-reparsed program covers the same set of cells.
+    pub occupancy_preserved: bool,
+    /// ...and with the same per-cell deposition count, so duplication survives the round-trip too.
+    pub deposit_preserved: bool,
+}
+
+impl RoundTrip {
+    /// True iff the program had geometry and both the covered cells and their deposition counts
+    /// survived emit -> re-parse.
+    pub fn ok(&self) -> bool {
+        self.has_geometry && self.occupancy_preserved && self.deposit_preserved
+    }
+}
+
+/// Emit `program` to G-code, re-parse it, and check the deposited material is preserved.
+///
+/// The `lo`->G-code emitter ([`crate::backend`]) sits outside the verified `hi`->`lo` boundary, so
+/// this guards that the G-code a printer will actually run still denotes what the move plan does. Run
+/// it on any move plan whose emitted output you intend to trust — e.g. an optimizer's or RL agent's
+/// result — before sending it to a machine.
+///
+/// Scope, stated precisely: this certifies the emitter is faithful to *this* move plan for covered
+/// cells and per-cell path multiplicity at `resolution_um`. It does NOT certify filament *volume*
+/// (the denotation has no extrusion-amount axis), sub-resolution geometry, or that the plan matches
+/// the original design intent (that is [`crate::self_lowering_sound`]). It is a per-program runtime
+/// check, not a proof.
+pub fn verify_roundtrip(program: &lo::Program, resolution_um: i64) -> RoundTrip {
+    let has_geometry = program
+        .layers
+        .iter()
+        .any(|l| l.toolpaths.iter().any(|t| t.kind.extrudes()));
+    let reparsed = parse(&to_gcode(program)).program;
+    RoundTrip {
+        resolution_um,
+        has_geometry,
+        occupancy_preserved: denote_lo(program, resolution_um)
+            == denote_lo(&reparsed, resolution_um),
+        deposit_preserved: denote_lo_deposit(program, resolution_um)
+            == denote_lo_deposit(&reparsed, resolution_um),
     }
 }
 
@@ -114,5 +168,76 @@ mod tests {
             !v.ok(),
             "a file with no recovered geometry must not verify as sound"
         );
+    }
+
+    #[test]
+    fn emitted_gcode_round_trips_for_a_lowered_program() {
+        use crate::ir::{hi, Area, ExtrudePath, Point, Polyline, RegionKind};
+        use crate::lower::lower;
+        let outer = Polyline::new(vec![
+            Point::new(0, 0),
+            Point::new(20_000, 0),
+            Point::new(20_000, 20_000),
+            Point::new(0, 20_000),
+            Point::new(0, 0),
+        ]);
+        let hi = hi::Program {
+            layers: vec![hi::Layer {
+                z_um: 200,
+                regions: vec![hi::Region {
+                    kind: RegionKind::Perimeter,
+                    boundary: Area {
+                        outer: outer.clone(),
+                        holes: vec![],
+                    },
+                    fills: vec![ExtrudePath {
+                        path: outer,
+                        width_um: 400,
+                    }],
+                }],
+            }],
+        };
+        let rt = verify_roundtrip(&lower(&hi), 200);
+        assert!(
+            rt.occupancy_preserved,
+            "emit->parse changed the covered cells"
+        );
+        assert!(
+            rt.deposit_preserved,
+            "emit->parse changed the deposition count"
+        );
+        assert!(rt.ok());
+    }
+
+    #[test]
+    fn round_trip_holds_on_optimized_real_output() {
+        // Parse real output, run the pass, and confirm the emitted G-code still denotes the same.
+        let optimized = TravelOrder::default().run(parse(SCATTERED).program);
+        assert!(
+            verify_roundtrip(&optimized, 200).ok(),
+            "an optimized plan must emit to G-code that re-parses to the same material"
+        );
+    }
+
+    #[test]
+    fn empty_or_travel_only_program_is_not_a_green_round_trip() {
+        use crate::ir::lo::{Layer, SegmentKind, Toolpath};
+        use crate::ir::{Point, Polyline};
+        // No layers at all.
+        assert!(!verify_roundtrip(&lo::Program { layers: vec![] }, 200).ok());
+        // A travel-only layer deposits nothing, so the round-trip must not read as green.
+        let travel_only = lo::Program {
+            layers: vec![Layer {
+                z_um: 200,
+                toolpaths: vec![Toolpath {
+                    kind: SegmentKind::Travel,
+                    path: Polyline::new(vec![Point::new(0, 0), Point::new(1000, 0)]),
+                    width_um: 0,
+                }],
+            }],
+        };
+        let rt = verify_roundtrip(&travel_only, 200);
+        assert!(!rt.has_geometry);
+        assert!(!rt.ok());
     }
 }

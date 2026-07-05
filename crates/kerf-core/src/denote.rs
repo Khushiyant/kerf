@@ -10,6 +10,10 @@
 //! microns. Cell inclusion is conservative coverage (marked if the capsule touches the cell at all),
 //! never centre-sampling, so a feature is never missed when resolution `<=` its width. The check is
 //! only as sharp as the resolution; choose `resolution_um <=` the smallest feature that matters.
+//!
+//! Cost scales with the number of covered cells (roughly total path length / resolution), and layers
+//! rasterize in parallel. For a hot loop such as an RL reward, run at a coarse `resolution_um` for a
+//! fast approximate check, then re-verify the chosen candidate at a fine resolution.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -147,31 +151,36 @@ fn mark_capsule(cells: &mut BTreeSet<(i64, i64)>, p: Point, q: Point, half: f64,
     }
 }
 
-/// The cells one path covers at resolution `r`, deduplicated within the path (so self-overlap counts
-/// once and the set is reversal-invariant).
-fn path_cells(poly: &Polyline, width_um: i64, r: i64) -> BTreeSet<(i64, i64)> {
+/// Mark every cell one path covers into `cells` (each segment thickened by half its width).
+fn mark_path(cells: &mut BTreeSet<(i64, i64)>, poly: &Polyline, width_um: i64, r: i64) {
     let half = width_um.max(0) as f64 / 2.0; // negative width is malformed; treat as 0
-    let mut cells = BTreeSet::new();
     let pts = &poly.points;
     match pts.len() {
         0 => {}
-        1 => mark_capsule(&mut cells, pts[0], pts[0], half, r),
+        1 => mark_capsule(cells, pts[0], pts[0], half, r),
         _ => {
             for seg in pts.windows(2) {
-                mark_capsule(&mut cells, seg[0], seg[1], half, r);
+                mark_capsule(cells, seg[0], seg[1], half, r);
             }
         }
     }
+}
+
+/// The cells one path covers at resolution `r`, deduplicated within the path (so self-overlap counts
+/// once and the set is reversal-invariant).
+fn path_cells(poly: &Polyline, width_um: i64, r: i64) -> BTreeSet<(i64, i64)> {
+    let mut cells = BTreeSet::new();
+    mark_path(&mut cells, poly, width_um, r);
     cells
 }
 
 /// Rasterize the swept material of a set of (path, width) pairs into a layer occupancy (the union of
-/// every path's covered cells).
+/// every path's covered cells). Paths mark directly into one set — no per-path allocation.
 fn occupancy_of(paths: &[(&Polyline, i64)], z_um: i64, resolution_um: i64) -> LayerOccupancy {
     let r = resolution_um.max(1);
     let mut cells = BTreeSet::new();
     for (poly, width_um) in paths {
-        cells.extend(path_cells(poly, *width_um, r));
+        mark_path(&mut cells, poly, *width_um, r);
     }
     LayerOccupancy {
         z_um,
@@ -375,6 +384,18 @@ mod tests {
         );
         assert!(d1.cells.values().all(|&c| c == 1));
         assert!(d2.cells.values().all(|&c| c == 2));
+    }
+
+    #[test]
+    fn occupancy_and_deposit_agree_on_covered_cells() {
+        // occupancy_of and deposit_of must mark the same cells; deposit just also counts them.
+        let a = Polyline::new(vec![Point::new(0, 0), Point::new(9000, 4000)]);
+        let b = Polyline::new(vec![Point::new(2000, 0), Point::new(2000, 8000)]);
+        let paths = [(&a, 400i64), (&b, 300i64)];
+        let occ = occupancy_of(&paths, 200, 200);
+        let dep_keys: BTreeSet<(i64, i64)> =
+            deposit_of(&paths, 200, 200).cells.keys().copied().collect();
+        assert_eq!(occ.cells, dep_keys);
     }
 
     #[test]

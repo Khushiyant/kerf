@@ -14,6 +14,7 @@ from ._kerf import (
     parse_gcode,
     program_to_gcode,
     verify_gcode,
+    verify_roundtrip,
     version,
 )
 
@@ -28,6 +29,7 @@ __all__ = [
     "parse_gcode",
     "program_to_gcode",
     "verify_gcode",
+    "verify_roundtrip",
     "version",
 ]
 __version__ = version()
