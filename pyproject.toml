@@ -7,7 +7,8 @@ name = "pykerf"
 version = "0.3.0"
 description = "Verify and diff 3D-printer G-code by the material it deposits — an open, checkable IR for the mesh-to-G-code half of the fabrication pipeline."
 readme = "README.md"
-license = { text = "MIT OR Apache-2.0" }
+license = "MIT OR Apache-2.0"
+license-files = ["LICENSE-MIT", "LICENSE-APACHE"]
 authors = [
     { name = "Khushiyant", email = "khushiyant2002@gmail.com" }
 ]
@@ -15,8 +16,6 @@ requires-python = ">=3.12"
 keywords = ["3d-printing", "gcode", "verification", "slicer", "fabrication"]
 classifiers = [
     "Development Status :: 4 - Beta",
-    "License :: OSI Approved :: MIT License",
-    "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Rust",
     "Programming Language :: Python :: 3",
     "Topic :: Scientific/Engineering",
