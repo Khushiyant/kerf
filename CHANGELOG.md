@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.3.1 (2026-07-05)
+
+### [0.3.1](https://github.com/Khushiyant/kerf/compare/v0.3.0...v0.3.1) (2026-07-05)
+
+
+### Bug Fixes
+
+* **release:** bundle license files in the wheel (PEP 639) ([f23e49b](https://github.com/Khushiyant/kerf/commit/f23e49b0cfd29ed64881a4e5ebc2738b87315e69))
+
+
+
 ## v0.3.0 (2026-07-05)
 
 ## [0.3.0](https://github.com/Khushiyant/kerf/compare/v0.2.0...v0.3.0) (2026-07-05)
