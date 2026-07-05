@@ -107,11 +107,20 @@ pub fn to_gcode_with(program: &Program, opts: &GcodeOptions) -> String {
                         let dx = (p.x - px) as f64 / 1000.0;
                         let dy = (p.y - py) as f64 / 1000.0;
                         let len = (dx * dx + dy * dy).sqrt();
-                        let e = match tp.flow_e {
+                        let mut e = match tp.flow_e {
                             Some(total) if total_len_mm > 0.0 => total * (len / total_len_mm),
                             _ if filament_area > 0.0 => w_mm * h_mm * len / filament_area,
                             _ => 0.0,
                         };
+                        // A moving extrude segment must emit an E the parser will read back as an
+                        // extrude, or the re-parse turns it into a travel and the material is lost. The
+                        // parser's threshold is EPS below the smallest 5-decimal E, so floor a nonzero
+                        // move at 1e-5 mm. This can only *raise* a vanishingly small commanded flow
+                        // (below G-code's own resolution) — occupancy round-trips; exact tiny-flow
+                        // fidelity does not, which is already out of scope for the emitter.
+                        if len > 0.0 && e < 1.0e-5 {
+                            e = 1.0e-5;
+                        }
                         let f = if first_seg && opts.print_feedrate > 0 {
                             format!(" F{}", opts.print_feedrate)
                         } else {
@@ -171,6 +180,35 @@ mod tests {
     use super::*;
     use crate::ir::lo::{Layer, Toolpath};
     use crate::ir::{hi, Area, ExtrudePath, Point, Polyline, RegionKind};
+
+    #[test]
+    fn a_tiny_commanded_flow_extrude_still_round_trips_as_an_extrude() {
+        // Regression: a very small flow_e distributed per segment used to emit E0.00000, which the
+        // parser reads as a travel — silently losing the material. Every moving extrude segment must
+        // emit an E the parser classifies as an extrude, so occupancy survives the round trip.
+        let prog = Program {
+            layers: vec![Layer {
+                z_um: 200,
+                toolpaths: vec![Toolpath {
+                    kind: SegmentKind::Extrude(RegionKind::Perimeter),
+                    path: Polyline::new(vec![
+                        Point::new(0, 0),
+                        Point::new(10_000, 0),
+                        Point::new(10_000, 10_000),
+                    ]),
+                    width_um: 400,
+                    flow_e: Some(1.0e-7), // absurdly small commanded flow
+                }],
+            }],
+        };
+        let reparsed = crate::frontend::parse(&to_gcode(&prog)).program;
+        assert_eq!(
+            crate::denote::denote_lo(&prog, 100),
+            crate::denote::denote_lo(&reparsed, 100),
+            "a tiny-flow extrude must not vanish into a travel on emit/re-parse",
+        );
+        assert_eq!(reparsed.extrusion_move_count(), 1);
+    }
 
     #[test]
     fn emits_gcode_for_a_square() {

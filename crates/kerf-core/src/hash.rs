@@ -2,10 +2,22 @@
 //! cache keys, and "same program" claims across runs and machines.
 //!
 //! The hash is a dependency-free FNV-1a-128 over a canonical byte encoding of the program in order
-//! (toolpath order is semantically meaningful, so it is part of the identity). It is consistent with
-//! structural equality: two programs equal by `==` hash identically. The digest is deterministic and
-//! endianness-independent (all integers are encoded big-endian), so a saved key means the same thing
-//! on any platform.
+//! (toolpath order is semantically meaningful, so it is part of the identity). The digest is
+//! deterministic and endianness-independent (all integers are encoded big-endian), so a saved key
+//! means the same thing on any platform.
+//!
+//! What is in the identity: layer count and Z; per toolpath its kind (extrude role vs travel), and —
+//! for extrudes only — width, commanded flow, and the point list. A travel's `width_um`/`flow_e` are
+//! inert (never emitted) and excluded. Geometry is integer microns and hashes exactly; commanded flow
+//! (`flow_e`) is an f64, so it is quantized to 1e-5 mm of E (below any emitted G-code's resolution)
+//! before hashing, which absorbs f64 summation/representation noise that raw bits would not.
+//!
+//! Stability scope: the digest is stable across the JSON round-trip (`to_json` → `from_json`), the
+//! form you persist — that is the "same program across processes" guarantee. It is **not** stable
+//! across a G-code emit/re-parse, because that path is lossy and outside the verified boundary (the
+//! emitter synthesizes E for flow-less paths and re-quantizes it per segment, and the parser
+//! re-coalesces toolpaths and drops travel-only layers). To ask "same deposited material" after a
+//! G-code round-trip, compare denotations ([`crate::denote`] / [`crate::diff`]), not this hash.
 
 use crate::ir::lo::{self, SegmentKind};
 use crate::ir::RegionKind;
@@ -35,6 +47,18 @@ impl Fnv1a {
     fn i64(&mut self, v: i64) {
         self.bytes(&v.to_be_bytes());
     }
+    /// Hash commanded flow canonically: quantized to 1e-5 mm E, with a distinct sentinel for the
+    /// absent and (pathological) non-finite cases so none of them collide.
+    fn flow(&mut self, flow_e: Option<f64>) {
+        match flow_e {
+            Some(e) if e.is_finite() => {
+                self.byte(0xF1);
+                self.i64((e * 1e5).round() as i64);
+            }
+            Some(_) => self.byte(0xF2), // NaN / ±inf (never arises from parse or JSON)
+            None => self.byte(0xF0),
+        }
+    }
 }
 
 fn role_tag(r: RegionKind) -> u8 {
@@ -57,19 +81,14 @@ pub fn canonical_hash_u128(program: &lo::Program) -> u128 {
         for tp in &layer.toolpaths {
             h.byte(0x02); // toolpath marker
             match tp.kind {
+                // Width and flow are part of an extrude's identity; for travel they are inert.
                 SegmentKind::Extrude(role) => {
                     h.byte(0x10);
                     h.byte(role_tag(role));
+                    h.i64(tp.width_um);
+                    h.flow(tp.flow_e);
                 }
                 SegmentKind::Travel => h.byte(0x11),
-            }
-            h.i64(tp.width_um);
-            match tp.flow_e {
-                Some(e) => {
-                    h.byte(0xF1);
-                    h.u64(e.to_bits());
-                }
-                None => h.byte(0xF0),
             }
             h.u64(tp.path.points.len() as u64);
             for p in &tp.path.points {
@@ -136,10 +155,11 @@ mod tests {
                 z_um: 200,
                 toolpaths: {
                     let mut v = a.clone();
-                    v.push(Toolpath::travel(Polyline::new(vec![
-                        Point::new(0, 0),
-                        Point::new(1, 1),
-                    ])));
+                    v.push(Toolpath::extrude(
+                        SegmentKind::Extrude(RegionKind::Infill),
+                        Polyline::new(vec![Point::new(0, 5000), Point::new(9, 5000)]),
+                        300,
+                    ));
                     v
                 },
             }],
@@ -151,5 +171,101 @@ mod tests {
             canonical_hash(&swapped),
             "order is part of the content identity"
         );
+    }
+
+    #[test]
+    fn flow_is_hashed_at_emitter_precision_not_raw_bits() {
+        // Two flows agreeing to 1e-5 mm E (below the emitter's resolution) are the same content.
+        assert_eq!(
+            canonical_hash(&prog(0, Some(0.222221))),
+            canonical_hash(&prog(0, Some(0.2222206))),
+            "sub-1e-5 flow noise must not change the hash"
+        );
+        // A difference the emitter *can* represent still changes the hash.
+        assert_ne!(
+            canonical_hash(&prog(0, Some(0.22222))),
+            canonical_hash(&prog(0, Some(0.22223))),
+        );
+    }
+
+    #[test]
+    fn a_travels_inert_width_and_flow_do_not_change_the_identity() {
+        let mk = |w: i64, e: Option<f64>| lo::Program {
+            layers: vec![Layer {
+                z_um: 200,
+                toolpaths: vec![Toolpath {
+                    kind: SegmentKind::Travel,
+                    path: Polyline::new(vec![Point::new(0, 0), Point::new(1000, 0)]),
+                    width_um: w,
+                    flow_e: e,
+                }],
+            }],
+        };
+        // width_um / flow_e are never emitted for a travel, so they are not part of its identity.
+        assert_eq!(
+            canonical_hash(&mk(0, None)),
+            canonical_hash(&mk(999, Some(3.0)))
+        );
+    }
+
+    #[test]
+    fn non_finite_flow_does_not_collide_with_zero_or_absent() {
+        let nan = canonical_hash(&prog(0, Some(f64::NAN)));
+        let inf = canonical_hash(&prog(0, Some(f64::INFINITY)));
+        assert_ne!(nan, canonical_hash(&prog(0, Some(0.0))));
+        assert_ne!(nan, canonical_hash(&prog(0, None)));
+        assert_eq!(
+            nan, inf,
+            "all non-finite flow shares one sentinel (all invalid alike)"
+        );
+    }
+}
+
+#[cfg(all(test, feature = "serde"))]
+mod proptests {
+    use super::*;
+    use crate::ir::lo::{Layer, SegmentKind};
+    use crate::ir::{Point, Polyline, RegionKind};
+    use proptest::prelude::*;
+
+    fn arb_prog() -> impl Strategy<Value = lo::Program> {
+        let pt = (-9000i64..9000, -9000i64..9000).prop_map(|(x, y)| Point::new(x, y));
+        let flow = prop_oneof![Just(None), (0.0f64..1000.0).prop_map(Some)];
+        let tp = (
+            prop_oneof![
+                Just(RegionKind::Perimeter),
+                Just(RegionKind::Infill),
+                Just(RegionKind::Skin),
+                Just(RegionKind::Support),
+            ],
+            prop::collection::vec(pt, 1..6),
+            50i64..600,
+            flow,
+        )
+            .prop_map(|(role, pts, w, flow_e)| lo::Toolpath {
+                kind: SegmentKind::Extrude(role),
+                path: Polyline::new(pts),
+                width_um: w,
+                flow_e,
+            });
+        let layer = (0i64..5000, prop::collection::vec(tp, 0..4)).prop_map(|(z, tps)| Layer {
+            z_um: z,
+            toolpaths: tps,
+        });
+        prop::collection::vec(layer, 0..4).prop_map(|ls| lo::Program { layers: ls })
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(400))]
+
+        // Canonicity across the persistence boundary: serialize to JSON and reload, and the hash is
+        // unchanged — for arbitrary programs, flow included. This is the "same program across
+        // processes" guarantee dedup/cache-keys rely on.
+        #[test]
+        fn hash_is_stable_across_json_round_trip(prog in arb_prog()) {
+            let json = crate::json::to_json(&prog).unwrap();
+            let back: lo::Program = crate::json::from_json(&json).unwrap();
+            prop_assert_eq!(canonical_hash(&back), canonical_hash(&prog));
+        }
     }
 }

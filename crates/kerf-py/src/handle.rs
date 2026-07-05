@@ -27,6 +27,20 @@ fn value_err<E: std::fmt::Display>(e: E) -> PyErr {
     PyValueError::new_err(e.to_string())
 }
 
+impl Program {
+    /// Apply an already-parsed action, marking the touched layers dirty. Shared by the JSON, indexed,
+    /// and sampled entry points. Not a Python method.
+    fn apply_action(&mut self, action: &Action) -> PyResult<Vec<usize>> {
+        let touched = action
+            .apply(&mut self.inner)
+            .map_err(|e| PyValueError::new_err(format!("action failed: {e:?}")))?;
+        for &l in &touched {
+            self.cache.mark_dirty(l);
+        }
+        Ok(touched)
+    }
+}
+
 #[pymethods]
 impl Program {
     /// Load from a low-level program JSON (as from `lower_to_json` / `parse_gcode`). `resolution_um`
@@ -88,24 +102,54 @@ impl Program {
             .ok_or_else(|| PyValueError::new_err("layer index out of range"))
     }
 
-    /// Enumerate the legal actions over the current program, as JSON.
+    /// Enumerate the legal actions over the current program, as JSON. Serializes the whole list;
+    /// for a hot loop prefer `action_count` + `apply_index`/`apply_sampled`, which never marshal it.
     fn legal_actions(&self) -> PyResult<String> {
         json::to_json(&kerf_core::transform::legal_actions(&self.inner)).map_err(value_err)
     }
 
-    /// Apply one action (JSON, as from `legal_actions`) in place, marking the touched layers dirty.
-    /// Returns the touched layer indices. Raises on an invalid/inapplicable action, leaving the
+    /// Number of legal actions right now — no serialization. Pair with `action`/`apply_index`.
+    fn action_count(&self) -> usize {
+        kerf_core::transform::legal_actions(&self.inner).len()
+    }
+
+    /// The i-th legal action as JSON (serializes just that one action).
+    fn action(&self, i: usize) -> PyResult<String> {
+        let acts = kerf_core::transform::legal_actions(&self.inner);
+        let a = acts
+            .get(i)
+            .ok_or_else(|| PyValueError::new_err("action index out of range"))?;
+        json::to_json(a).map_err(value_err)
+    }
+
+    /// Apply one action (JSON, as from `legal_actions`/`action`) in place, marking the touched layers
+    /// dirty. Returns the touched layer indices. Raises on an invalid/inapplicable action, leaving the
     /// program unchanged.
     fn apply(&mut self, action_json: &str) -> PyResult<Vec<usize>> {
         let action: Action = json::from_json(action_json)
             .map_err(|e| PyValueError::new_err(format!("invalid action JSON; {e}")))?;
-        let touched = action
-            .apply(&mut self.inner)
-            .map_err(|e| PyValueError::new_err(format!("action failed: {e:?}")))?;
-        for &l in &touched {
-            self.cache.mark_dirty(l);
+        self.apply_action(&action)
+    }
+
+    /// Apply the i-th legal action in place — no JSON crosses the boundary. Returns touched layers.
+    fn apply_index(&mut self, i: usize) -> PyResult<Vec<usize>> {
+        let acts = kerf_core::transform::legal_actions(&self.inner);
+        let action = acts
+            .get(i)
+            .ok_or_else(|| PyValueError::new_err("action index out of range"))?
+            .clone();
+        self.apply_action(&action)
+    }
+
+    /// Apply a seeded-deterministic legal action in place (the hot-loop primitive: no JSON, no full
+    /// action list marshaled). Returns touched layers, or an empty list if there are no legal actions.
+    fn apply_sampled(&mut self, seed: u64) -> PyResult<Vec<usize>> {
+        let acts = kerf_core::transform::legal_actions(&self.inner);
+        if acts.is_empty() {
+            return Ok(Vec::new());
         }
-        Ok(touched)
+        let action = acts[(seed % acts.len() as u64) as usize].clone();
+        self.apply_action(&action)
     }
 
     /// Mark a layer dirty by hand (after an out-of-band edit).
@@ -115,6 +159,12 @@ impl Program {
 
     /// The current deposited-material occupancy (JSON), computed incrementally — only layers changed
     /// since the last call are re-rasterized.
+    ///
+    /// Note: this MARSHALS every layer's cells to Python (O(cells)), which dominates the cost on a
+    /// cache hit — the incremental raster win is buried by serialization. Do NOT call it inside a hot
+    /// loop. For a per-step reward/gate use `iou_to` (returns a float) or `preserves_within` (returns
+    /// a bool), computed handle-to-handle in Rust; `graded_to` returns a compact per-layer report
+    /// (O(layers), not O(cells)) — fine per step, but not a bare scalar.
     fn occupancy(&mut self) -> PyResult<String> {
         let occ = self.cache.occupancy(&self.inner);
         json::to_json(&occ).map_err(value_err)
@@ -217,7 +267,10 @@ impl Program {
         json::to_json(&feature::travel_graph(&self.inner)).map_err(value_err)
     }
 
-    /// Emit the current program to G-code (commanded flow is emitted faithfully when present).
+    /// Emit the current program to G-code. Geometry (integer µm) round-trips exactly; commanded flow
+    /// is emitted at the machine's 5-decimal E resolution (so tiny sub-1e-5 mm flows are not exactly
+    /// preserved, and flow-less paths get a synthesized volumetric E). The emitter is outside the
+    /// verified boundary — use `verify_roundtrip` (via the JSON functions) to check a specific plan.
     fn to_gcode(&self) -> String {
         backend::to_gcode(&self.inner)
     }

@@ -26,7 +26,9 @@ serde = ["dep:serde", "dep:serde_json"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"], optional = true }
-serde_json = { version = "1", optional = true }
+# float_roundtrip: deserialize f64 (e.g. Toolpath.flow_e) bit-exactly, so to_json -> from_json is a
+# true identity for the IR — not 1-ULP lossy on some values.
+serde_json = { version = "1", optional = true, features = ["float_roundtrip"] }
 rayon = "1"
 
 [dev-dependencies]
