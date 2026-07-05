@@ -20,10 +20,14 @@ use std::collections::{BTreeMap, BTreeSet};
 #[cfg(not(kani))]
 use rayon::prelude::*;
 
+#[cfg(feature = "serde")]
+use serde::Serialize;
+
 use crate::ir::{hi, lo, Point, Polyline};
 
 /// Occupancy of one layer: the occupied cell coordinates on a `resolution_um` grid.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Serialize))]
 pub struct LayerOccupancy {
     pub z_um: i64,
     pub resolution_um: i64,
@@ -33,6 +37,7 @@ pub struct LayerOccupancy {
 /// Occupancy of a whole program. Two programs denote the same material at this resolution iff their
 /// occupancies are equal.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Serialize))]
 pub struct Occupancy {
     pub layers: Vec<LayerOccupancy>,
 }
@@ -59,6 +64,40 @@ pub struct LayerDeposit {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Deposit {
     pub layers: Vec<LayerDeposit>,
+}
+
+/// Volume of one layer: summed deposited melt volume (mm³) per cell. f64 — compare with
+/// [`Volume::approx_eq`], not `==`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LayerVolume {
+    pub z_um: i64,
+    pub resolution_um: i64,
+    pub layer_height_um: i64,
+    pub cells: BTreeMap<(i64, i64), f64>,
+}
+
+/// Per-cell deposited melt volume over a whole program. Unlike [`Occupancy`] (coverage) and
+/// [`Deposit`] (path count), this moves when a bead gets wider — surfacing over-/under-extrusion
+/// expressed as geometry. It still cannot see commanded flow (E / M221) at fixed geometry, since the
+/// IR carries no extrusion-amount axis. f64 volumes; compare with [`Volume::approx_eq`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct Volume {
+    pub layers: Vec<LayerVolume>,
+}
+
+impl Volume {
+    /// Per-cell volume equality within `eps` mm³ (values are f64, so `==` is too brittle).
+    pub fn approx_eq(&self, other: &Volume, eps: f64) -> bool {
+        self.layers.len() == other.layers.len()
+            && self.layers.iter().zip(&other.layers).all(|(a, b)| {
+                a.z_um == b.z_um
+                    && a.resolution_um == b.resolution_um
+                    && a.cells.len() == b.cells.len()
+                    && a.cells
+                        .iter()
+                        .all(|(k, va)| b.cells.get(k).is_some_and(|vb| (va - vb).abs() <= eps))
+            })
+    }
 }
 
 /// Squared distance from point `p` to segment `a`-`b`, in f64.
@@ -172,6 +211,12 @@ fn path_cells(poly: &Polyline, width_um: i64, r: i64) -> BTreeSet<(i64, i64)> {
     let mut cells = BTreeSet::new();
     mark_path(&mut cells, poly, width_um, r);
     cells
+}
+
+/// The grid cells a single polyline covers at `resolution_um` when laid down at `width_um`. Exposed
+/// for analyses over deposited geometry (e.g. checking whether a travel crosses printed material).
+pub fn polyline_cells(poly: &Polyline, width_um: i64, resolution_um: i64) -> BTreeSet<(i64, i64)> {
+    path_cells(poly, width_um, resolution_um.max(1))
 }
 
 /// Rasterize the swept material of a set of (path, width) pairs into a layer occupancy (the union of
@@ -296,6 +341,108 @@ pub fn self_lowering_sound(program: &hi::Program, resolution_um: i64) -> bool {
     denote_hi(program, resolution_um) == denote_lo(&crate::lower::lower(program), resolution_um)
 }
 
+/// Per-layer height (microns) from consecutive z (layer 0 uses its own z), or a fixed override.
+/// Matches the backend's `h = z - prev_z` rule so volume agrees with the emitted flow.
+fn layer_heights(zs: impl Iterator<Item = i64>, override_um: Option<i64>) -> Vec<i64> {
+    let mut prev: Option<i64> = None;
+    zs.map(|z| {
+        let h = override_um.unwrap_or_else(|| match prev {
+            Some(p) => (z - p).max(1),
+            None => z.max(1),
+        });
+        prev = Some(z);
+        h
+    })
+    .collect()
+}
+
+/// Rasterize deposited melt volume (mm³) per cell for one layer: each segment's volume
+/// (width × layer-height × length) spread uniformly over the cells it covers. Total is conserved per
+/// path regardless of resolution.
+fn volume_of(
+    paths: &[(&Polyline, i64)],
+    z_um: i64,
+    resolution_um: i64,
+    layer_height_um: i64,
+) -> LayerVolume {
+    let r = resolution_um.max(1);
+    let h_mm = layer_height_um.max(1) as f64 / 1000.0;
+    let mut cells: BTreeMap<(i64, i64), f64> = BTreeMap::new();
+    for (poly, width_um) in paths {
+        let w_mm = (*width_um).max(0) as f64 / 1000.0;
+        let half = (*width_um).max(0) as f64 / 2.0;
+        for seg in poly.points.windows(2) {
+            let mut seg_cells = BTreeSet::new();
+            mark_capsule(&mut seg_cells, seg[0], seg[1], half, r);
+            let n = seg_cells.len();
+            if n == 0 {
+                continue;
+            }
+            let dx = (seg[1].x - seg[0].x) as f64;
+            let dy = (seg[1].y - seg[0].y) as f64;
+            let len_mm = (dx * dx + dy * dy).sqrt() / 1000.0;
+            let per = w_mm * h_mm * len_mm / n as f64;
+            for c in seg_cells {
+                *cells.entry(c).or_insert(0.0) += per;
+            }
+        }
+    }
+    LayerVolume {
+        z_um,
+        resolution_um: r,
+        layer_height_um: layer_height_um.max(1),
+        cells,
+    }
+}
+
+/// Deposited melt volume (mm³) per cell for a low-level program. Layer height is derived from
+/// consecutive z (matching the backend) unless `layer_height_um` is given.
+pub fn denote_lo_volume(
+    program: &lo::Program,
+    resolution_um: i64,
+    layer_height_um: Option<i64>,
+) -> Volume {
+    let heights = layer_heights(program.layers.iter().map(|l| l.z_um), layer_height_um);
+    let layers = program
+        .layers
+        .iter()
+        .zip(heights)
+        .map(|(layer, h)| {
+            let paths: Vec<(&Polyline, i64)> = layer
+                .toolpaths
+                .iter()
+                .filter(|t| t.kind.extrudes())
+                .map(|t| (&t.path, t.width_um))
+                .collect();
+            volume_of(&paths, layer.z_um, resolution_um, h)
+        })
+        .collect();
+    Volume { layers }
+}
+
+/// Deposited melt volume (mm³) per cell for a high-level program.
+pub fn denote_hi_volume(
+    program: &hi::Program,
+    resolution_um: i64,
+    layer_height_um: Option<i64>,
+) -> Volume {
+    let heights = layer_heights(program.layers.iter().map(|l| l.z_um), layer_height_um);
+    let layers = program
+        .layers
+        .iter()
+        .zip(heights)
+        .map(|(layer, h)| {
+            let paths: Vec<(&Polyline, i64)> = layer
+                .regions
+                .iter()
+                .flat_map(|reg| reg.fills.iter().map(|f| (&f.path, f.width_um)))
+                .collect();
+            volume_of(&paths, layer.z_um, resolution_um, h)
+        })
+        .collect();
+    Volume { layers }
+}
+
 /// Bounded proofs discharged by Kani (`cargo kani -p kerf-core`), not run by `cargo test`. Each
 /// harness targets a pure, loop- and allocation-free kernel so the model checker terminates.
 #[cfg(kani)]
@@ -412,6 +559,43 @@ mod tests {
             deposit_of(&[(&fwd, 400)], 200, 200),
             deposit_of(&[(&rev, 400)], 200, 200)
         );
+    }
+
+    #[test]
+    fn volume_moves_with_bead_width_unlike_occupancy_or_deposit() {
+        let seg = Polyline::new(vec![Point::new(0, 0), Point::new(20_000, 0)]);
+        let total = |w: i64| -> f64 { volume_of(&[(&seg, w)], 200, 200, 200).cells.values().sum() };
+        // A wider bead deposits proportionally more volume over the same span — the exact thing
+        // Occupancy (a set) and Deposit (a path count) are blind to.
+        assert!(total(800) > total(400) * 1.5);
+    }
+
+    #[test]
+    fn volume_is_conserved_across_resolution_and_reversal_invariant() {
+        let seg = Polyline::new(vec![Point::new(0, 0), Point::new(30_000, 7000)]);
+        let len_mm = ((30_000f64).powi(2) + (7000f64).powi(2)).sqrt() / 1000.0;
+        let expect = 0.4 * 0.2 * len_mm; // width 400um, height 200um
+        for r in [100, 200, 500, 1000] {
+            let v: f64 = volume_of(&[(&seg, 400)], 200, r, 200).cells.values().sum();
+            assert!((v - expect).abs() < 1e-6, "res {r}: {v} != {expect}");
+        }
+        let mut rp = seg.points.clone();
+        rp.reverse();
+        let rev = Polyline::new(rp);
+        let a = Volume {
+            layers: vec![volume_of(&[(&seg, 400)], 200, 200, 200)],
+        };
+        let b = Volume {
+            layers: vec![volume_of(&[(&rev, 400)], 200, 200, 200)],
+        };
+        assert!(a.approx_eq(&b, 1e-9));
+    }
+
+    #[test]
+    fn lowering_preserves_volume() {
+        let p = square_program();
+        assert!(denote_hi_volume(&p, 200, None)
+            .approx_eq(&denote_lo_volume(&crate::lower::lower(&p), 200, None), 1e-9));
     }
 
     #[test]

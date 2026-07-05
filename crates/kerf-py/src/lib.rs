@@ -61,6 +61,11 @@ fn parse_hi(program_json: &str) -> PyResult<hi::Program> {
         .map_err(|e| PyValueError::new_err(format!("invalid high-level program JSON: {e}")))
 }
 
+fn parse_lo(program_json: &str) -> PyResult<kerf_core::ir::lo::Program> {
+    json::from_json(program_json)
+        .map_err(|e| PyValueError::new_err(format!("invalid low-level program JSON: {e}")))
+}
+
 /// Lower a high-level program (given as JSON) and emit G-code.
 #[pyfunction]
 fn program_to_gcode(program_json: &str) -> PyResult<String> {
@@ -176,6 +181,56 @@ fn diff_programs(a_json: &str, b_json: &str, resolution_um: i64) -> PyResult<Str
     json::to_json(&d).map_err(|e| PyValueError::new_err(e.to_string()))
 }
 
+/// The deposited-material occupancy of a low-level program (JSON) at a resolution: per-layer occupied
+/// cells (`[[x, y], ...]`). Useful as a spatial observation/feature, for custom metrics, or drawing.
+#[pyfunction]
+#[pyo3(signature = (program_json, resolution_um=200))]
+fn occupancy(program_json: &str, resolution_um: i64) -> PyResult<String> {
+    let occ = denote::denote_lo(&parse_lo(program_json)?, resolution_um);
+    json::to_json(&occ).map_err(|e| PyValueError::new_err(e.to_string()))
+}
+
+/// Size and efficiency stats for a program (JSON): layer and toolpath counts and total travel
+/// distance (an efficiency / print-time proxy).
+#[pyfunction]
+fn program_stats(program_json: &str) -> PyResult<String> {
+    let s = kerf_core::analyze::program_stats(&parse_lo(program_json)?);
+    json::to_json(&s).map_err(|e| PyValueError::new_err(e.to_string()))
+}
+
+/// Over-deposition stats for a program (JSON) at a resolution: over-deposited cell count, graded
+/// redeposition magnitude, and max multiplicity. Counts paths per cell, not filament volume.
+#[pyfunction]
+#[pyo3(signature = (program_json, resolution_um=200))]
+fn deposit_stats(program_json: &str, resolution_um: i64) -> PyResult<String> {
+    let s = kerf_core::analyze::deposit_stats(&parse_lo(program_json)?, resolution_um);
+    json::to_json(&s).map_err(|e| PyValueError::new_err(e.to_string()))
+}
+
+/// Heuristic, report-only travel-vs-material check for a program (JSON): deposited cells each layer's
+/// travels pass through, a nozzle-drag / stringing proxy. Not exact collision detection.
+#[pyfunction]
+#[pyo3(signature = (program_json, resolution_um=200))]
+fn travel_collisions(program_json: &str, resolution_um: i64) -> PyResult<String> {
+    let s = kerf_core::analyze::travel_collisions(&parse_lo(program_json)?, resolution_um);
+    json::to_json(&s).map_err(|e| PyValueError::new_err(e.to_string()))
+}
+
+/// Deposited melt volume (mm³) of a program (JSON): total and per-layer. Moves with bead width, so it
+/// surfaces over-/under-extrusion that coverage and path-count miss (geometry only, not commanded
+/// flow). Layer height is derived from consecutive Z unless `layer_height_um` is given.
+#[pyfunction]
+#[pyo3(signature = (program_json, resolution_um=200, layer_height_um=None))]
+fn volume_stats(
+    program_json: &str,
+    resolution_um: i64,
+    layer_height_um: Option<i64>,
+) -> PyResult<String> {
+    let s =
+        kerf_core::analyze::volume_stats(&parse_lo(program_json)?, resolution_um, layer_height_um);
+    json::to_json(&s).map_err(|e| PyValueError::new_err(e.to_string()))
+}
+
 /// The kerf-core crate version.
 #[pyfunction]
 fn version() -> &'static str {
@@ -195,6 +250,12 @@ fn _kerf(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(verify_roundtrip, m)?)?;
     m.add_function(wrap_pyfunction!(diff_gcode, m)?)?;
     m.add_function(wrap_pyfunction!(diff_programs, m)?)?;
+    // analyses
+    m.add_function(wrap_pyfunction!(occupancy, m)?)?;
+    m.add_function(wrap_pyfunction!(program_stats, m)?)?;
+    m.add_function(wrap_pyfunction!(deposit_stats, m)?)?;
+    m.add_function(wrap_pyfunction!(travel_collisions, m)?)?;
+    m.add_function(wrap_pyfunction!(volume_stats, m)?)?;
     // demos
     m.add_function(wrap_pyfunction!(demo_square_gcode, m)?)?;
     m.add_function(wrap_pyfunction!(demo_self_lowering_sound, m)?)?;

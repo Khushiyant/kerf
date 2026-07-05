@@ -9,14 +9,19 @@ from ._kerf import (
     demo_square_gcode,
     demo_square_json,
     demo_travel_order,
+    deposit_stats,
     diff_gcode,
     diff_programs,
     lower_to_json,
+    occupancy,
     parse_gcode,
+    program_stats,
     program_to_gcode,
+    travel_collisions,
     verify_gcode,
     verify_roundtrip,
     version,
+    volume_stats,
 )
 
 __all__ = [
@@ -25,13 +30,18 @@ __all__ = [
     "demo_square_gcode",
     "demo_square_json",
     "demo_travel_order",
+    "deposit_stats",
     "diff_gcode",
     "diff_programs",
     "lower_to_json",
+    "occupancy",
     "parse_gcode",
+    "program_stats",
     "program_to_gcode",
+    "travel_collisions",
     "verify_gcode",
     "verify_roundtrip",
     "version",
+    "volume_stats",
 ]
 __version__ = version()
