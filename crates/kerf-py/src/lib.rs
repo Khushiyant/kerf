@@ -56,36 +56,47 @@ fn demo_scattered() -> hi::Program {
     }
 }
 
-fn parse_hi(program_json: &str) -> PyResult<hi::Program> {
-    json::from_json(program_json)
-        .map_err(|e| PyValueError::new_err(format!("invalid high-level program JSON: {e}")))
+fn parse_hi(hi_program_json: &str) -> PyResult<hi::Program> {
+    json::from_json(hi_program_json).map_err(|e| {
+        PyValueError::new_err(format!(
+            "expected a HIGH-LEVEL program JSON (layers of regions with fills, e.g. from \
+             demo_square_json()); {e}"
+        ))
+    })
 }
 
-fn parse_lo(program_json: &str) -> PyResult<kerf_core::ir::lo::Program> {
-    json::from_json(program_json)
-        .map_err(|e| PyValueError::new_err(format!("invalid low-level program JSON: {e}")))
+fn parse_lo(lo_program_json: &str) -> PyResult<kerf_core::ir::lo::Program> {
+    json::from_json(lo_program_json).map_err(|e| {
+        PyValueError::new_err(format!(
+            "expected a LOW-LEVEL program JSON (layers of toolpaths, e.g. from lower_to_json() or \
+             parse_gcode()); {e}"
+        ))
+    })
 }
 
-/// Lower a high-level program (given as JSON) and emit G-code.
+/// Lower a HIGH-LEVEL program (JSON with regions/fills, e.g. from `demo_square_json`) and emit G-code.
 #[pyfunction]
-fn program_to_gcode(program_json: &str) -> PyResult<String> {
-    Ok(backend::to_gcode(&lower::lower(&parse_hi(program_json)?)))
+fn program_to_gcode(hi_program_json: &str) -> PyResult<String> {
+    Ok(backend::to_gcode(&lower::lower(&parse_hi(
+        hi_program_json,
+    )?)))
 }
 
-/// Lower a high-level program (JSON) to the low-level move plan, returned as JSON for inspection.
+/// Lower a HIGH-LEVEL program (JSON) to the low-level move plan, returned as JSON. This is the bridge:
+/// its output is the LOW-LEVEL JSON the analysis/verify functions consume.
 #[pyfunction]
-fn lower_to_json(program_json: &str) -> PyResult<String> {
-    let lowered = lower::lower(&parse_hi(program_json)?);
+fn lower_to_json(hi_program_json: &str) -> PyResult<String> {
+    let lowered = lower::lower(&parse_hi(hi_program_json)?);
     json::to_json(&lowered).map_err(|e| PyValueError::new_err(e.to_string()))
 }
 
-/// Does lowering the given high-level program (JSON) preserve the deposited material at this
+/// Does lowering the given HIGH-LEVEL program (JSON) preserve the deposited material at this
 /// resolution (microns)?
 #[pyfunction]
-#[pyo3(signature = (program_json, resolution_um=200))]
-fn check_self_lowering_sound(program_json: &str, resolution_um: i64) -> PyResult<bool> {
+#[pyo3(signature = (hi_program_json, resolution_um=200))]
+fn check_self_lowering_sound(hi_program_json: &str, resolution_um: i64) -> PyResult<bool> {
     Ok(denote::self_lowering_sound(
-        &parse_hi(program_json)?,
+        &parse_hi(hi_program_json)?,
         resolution_um,
     ))
 }
@@ -158,11 +169,9 @@ fn diff_gcode(a: &str, b: &str, resolution_um: i64) -> PyResult<String> {
 /// boundary, so run this before trusting emitted G-code (e.g. an RL agent's output). Returns a JSON
 /// report with `occupancy_preserved` / `deposit_preserved`.
 #[pyfunction]
-#[pyo3(signature = (program_json, resolution_um=200))]
-fn verify_roundtrip(program_json: &str, resolution_um: i64) -> PyResult<String> {
-    let prog: kerf_core::ir::lo::Program = json::from_json(program_json)
-        .map_err(|e| PyValueError::new_err(format!("invalid low-level program JSON: {e}")))?;
-    let rt = kerf_core::verify::verify_roundtrip(&prog, resolution_um);
+#[pyo3(signature = (lo_program_json, resolution_um=200))]
+fn verify_roundtrip(lo_program_json: &str, resolution_um: i64) -> PyResult<String> {
+    let rt = kerf_core::verify::verify_roundtrip(&parse_lo(lo_program_json)?, resolution_um);
     json::to_json(&rt).map_err(|e| PyValueError::new_err(e.to_string()))
 }
 

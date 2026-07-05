@@ -751,8 +751,29 @@ fn lex_words(code: &str) -> Vec<(char, f64)> {
             let letter = c.to_ascii_uppercase();
             i += 1;
             let start = i;
-            while i < b.len() && (b[i].is_ascii_digit() || matches!(b[i], '.' | '-' | '+')) {
-                i += 1;
+            let mut saw_digit = false;
+            while i < b.len() {
+                let ch = b[i];
+                if ch.is_ascii_digit() {
+                    saw_digit = true;
+                    i += 1;
+                } else if matches!(ch, '.' | '-' | '+') {
+                    i += 1;
+                } else if matches!(ch, 'e' | 'E') && saw_digit && is_exponent(&b, i) {
+                    // Scientific notation, which Marlin/strtod accepts (e.g. `X1.5e2` == X150). Consume
+                    // `e[+/-]digits` as part of THIS number so the `e`/`E` is never mis-split into a
+                    // spurious extrusion word — which would silently turn a travel into an extrude.
+                    i += 1;
+                    if i < b.len() && matches!(b[i], '+' | '-') {
+                        i += 1;
+                    }
+                    while i < b.len() && b[i].is_ascii_digit() {
+                        i += 1;
+                    }
+                    break;
+                } else {
+                    break;
+                }
             }
             let s: String = b[start..i].iter().collect();
             words.push((letter, s.parse::<f64>().unwrap_or(f64::NAN)));
@@ -761,6 +782,15 @@ fn lex_words(code: &str) -> Vec<(char, f64)> {
         }
     }
     words
+}
+
+/// True if the `e`/`E` at `e_idx` begins a valid exponent: an optional sign then at least one digit.
+fn is_exponent(b: &[char], e_idx: usize) -> bool {
+    let mut j = e_idx + 1;
+    if j < b.len() && matches!(b[j], '+' | '-') {
+        j += 1;
+    }
+    j < b.len() && b[j].is_ascii_digit()
 }
 
 fn parse_mm(s: &str) -> Option<f64> {
@@ -910,6 +940,38 @@ mod tests {
             .filter(|t| t.kind.extrudes())
             .map(|t| t.width_um)
             .collect()
+    }
+
+    #[test]
+    fn scientific_notation_is_one_number_not_a_spurious_e_word() {
+        // The bug: `X1.5e2` split into X=1.5 and a phantom E=2, silently turning a travel into an
+        // extrude. It must lex as a single value (Marlin/strtod: X1.5e2 == 150).
+        assert_eq!(lex_words("X1.5e2 Y3"), vec![('X', 150.0), ('Y', 3.0)]);
+        assert_eq!(lex_words("X1.5E2"), vec![('X', 150.0)]);
+        assert_eq!(lex_words("X-1.25e2"), vec![('X', -125.0)]);
+        assert_eq!(lex_words("X2e3 E1"), vec![('X', 2000.0), ('E', 1.0)]);
+        // A real, space-separated E word is untouched; a bare E (no mantissa) stays an E word.
+        assert_eq!(
+            lex_words("G1 X10 E5"),
+            vec![('G', 1.0), ('X', 10.0), ('E', 5.0)]
+        );
+        assert_eq!(lex_words("G1 E2"), vec![('G', 1.0), ('E', 2.0)]);
+    }
+
+    #[test]
+    fn sci_notation_coordinate_is_not_silently_corrupted_into_an_extrude() {
+        // `X1.5e2` must reach X=150 mm on a real extrude, not X=1.5 mm with a phantom E.
+        let g = "G21\nM83\n;LAYER:0\n;TYPE:Perimeter\nG1 X0 Y0 E0\nG1 X1.5e2 Y0 E1\n";
+        let prog = parse(g).program;
+        let max_x = prog
+            .layers
+            .iter()
+            .flat_map(|l| &l.toolpaths)
+            .flat_map(|t| &t.path.points)
+            .map(|p| p.x)
+            .max()
+            .unwrap();
+        assert_eq!(max_x, 150_000, "X1.5e2 should be 150 mm = 150000 um");
     }
 
     #[test]
