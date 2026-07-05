@@ -1,16 +1,18 @@
 /-
-Kerf — machine-checked soundness proofs (P1–P4) over the discrete denotational model.
+Kerf — machine-checked soundness proofs (P1–P5) over the discrete denotational model.
 
 `denote` maps a program to an occupancy: a characteristic function `Cell → Bool` marking the deposited
 cells — exactly what `kerf-core`'s rasterizer computes, per layer, on the integer lattice. A layer is a
 list of deposited segments; its occupancy is the union (pointwise `or`) of their coverage.
 
-Everything reduces to two abstract properties of coverage: it sees a segment only through its unordered
-endpoints (`Coverage.symm`) and it is translation-equivariant (`Coverage.trans`). The `kerf-core`
-implementation discharges `symm` via `canon_seg`, which **Kani proves order-independent for all i64
-endpoints** (`canon_seg_is_order_independent`). So Lean proves, unbounded, that these properties imply
-P1–P4; Kani proves the concrete rasterizer has the properties. Together: the soundness argument,
-mechanically checked end to end. No `sorry`, no Mathlib (checked by `#print axioms` at the bottom).
+Everything reduces to three abstract properties of coverage: it sees a segment only through its
+unordered endpoints (`Coverage.symm`), and it is equivariant under whole-cell translation
+(`Coverage.trans`) and 90° lattice rotation (`Coverage.rot90`) — both isometries of the integer grid.
+The `kerf-core` implementation discharges `symm` via `canon_seg`, which **Kani proves order-independent
+for all i64 endpoints** (`canon_seg_is_order_independent`); `trans` and `rot90` hold because the capsule
+reach test depends only on lattice distances, which those isometries preserve. So Lean proves,
+unbounded, that these properties imply P1–P5. Together: the soundness argument, mechanically checked
+end to end. No `sorry`, no Mathlib (checked by `#print axioms` at the bottom).
 -/
 
 namespace Kerf
@@ -35,15 +37,30 @@ def Seg.swap (s : Seg) : Seg := ⟨s.b, s.a, s.w⟩
 def Seg.shift (d : Cell) (s : Seg) : Seg :=
   ⟨(s.a.1 + d.1, s.a.2 + d.2), (s.b.1 + d.1, s.b.2 + d.2), s.w⟩
 
+/-- Rotate a cell 90° CCW about the origin on the integer lattice: `(x, y) ↦ (-y-1, x)` — the exact
+    index map `kerf-core`'s voxel `rot_z90` uses. -/
+def rot90cell : Cell → Cell
+  | (x, y) => (-y - 1, x)
+
+/-- The inverse of `rot90cell`: `(x, y) ↦ (y, -x-1)`. -/
+def rot90cellInv : Cell → Cell
+  | (x, y) => (y, -x - 1)
+
+/-- Rotate a segment 90° CCW by rotating both endpoints. -/
+def Seg.rot90 (s : Seg) : Seg := ⟨rot90cell s.a, rot90cell s.b, s.w⟩
+
 /-- The abstract guarantees `kerf-core`'s rasterizer provides about coverage. `symm` is discharged in
-    the implementation by `canon_seg` (Kani: `canon_seg_is_order_independent`); `trans` by the
-    whole-cell-shift argument in `docs/08-semantics.md` (P2). -/
+    the implementation by `canon_seg` (Kani: `canon_seg_is_order_independent`); `trans` and `rot90` by
+    the reach test seeing only lattice distances, which translations and 90° turns preserve (`docs/08`). -/
 structure Coverage where
   cover : Seg → Cell → Bool
   /-- Coverage depends on a segment only through its unordered endpoints. -/
   symm  : ∀ s c, cover s.swap c = cover s c
   /-- Coverage is equivariant under a whole-cell translation. -/
   trans : ∀ d s c, cover (Seg.shift d s) (c.1 + d.1, c.2 + d.2) = cover s c
+  /-- Coverage is equivariant under a 90° lattice rotation (an isometry of the integer grid): the
+      rotated segment covers `c` exactly where the original covers the inverse-rotated cell. -/
+  rot90 : ∀ s c, cover (Seg.rot90 s) c = cover s (rot90cellInv c)
 
 variable (C : Coverage)
 
@@ -102,6 +119,21 @@ theorem translation_invariant (d : Cell) (l : List Seg) :
   have e2 : (c.2 - d.2) + d.2 = c.2 := by omega
   rw [e1, e2] at h
   exact h
+
+/-! ### P5 — 90° rotation invariance. -/
+
+/-- Rotate an occupancy 90° CCW: read the source at the inverse-rotated cell. -/
+def rot90Occ (o : Occ) : Occ := fun c => o (rot90cellInv c)
+
+/-- **P5.** Rotating every segment 90° about the origin rotates the deposited material the same way —
+    the grid rotation is denotation-equivariant, extending P2 from whole-cell translations to 90°
+    turns. This is the property `kerf-core`'s voxel `rot_z90` relies on. -/
+theorem rotation90_invariant (l : List Seg) :
+    denote C (l.map Seg.rot90) = rot90Occ (denote C l) := by
+  funext c
+  unfold denote rot90Occ
+  rw [any_map]
+  exact any_congr (fun s => C.rot90 s c) l
 
 /-! ### P4 — pass soundness (reorder + per-segment reversal). -/
 
@@ -209,5 +241,6 @@ end Kerf
 -- No `sorry` and no axioms beyond Lean's standard `propext`/`Classical.choice`/`Quot.sound`.
 #print axioms Kerf.reversal_invariant
 #print axioms Kerf.translation_invariant
+#print axioms Kerf.rotation90_invariant
 #print axioms Kerf.pass_sound
 #print axioms Kerf.lowering_sound

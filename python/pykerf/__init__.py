@@ -5,6 +5,7 @@ The IR crosses the boundary as JSON (see ``demo_square_json`` for the shape).
 
 from ._kerf import (
     check_self_lowering_sound,
+    compare_rotated,
     demo_self_lowering_sound,
     demo_square_gcode,
     demo_square_json,
@@ -19,16 +20,22 @@ from ._kerf import (
     parse_gcode,
     program_stats,
     program_to_gcode,
+    rot_x90,
+    rot_y90,
+    rot_z90,
+    rotate_bounds,
     rotate_z,
     travel_collisions,
     verify_gcode,
     verify_roundtrip,
     version,
     volume_stats,
+    voxelize,
 )
 
 __all__ = [
     "check_self_lowering_sound",
+    "compare_rotated",
     "demo_self_lowering_sound",
     "demo_square_gcode",
     "demo_square_json",
@@ -43,11 +50,16 @@ __all__ = [
     "parse_gcode",
     "program_stats",
     "program_to_gcode",
+    "rot_x90",
+    "rot_y90",
+    "rot_z90",
+    "rotate_bounds",
     "rotate_z",
     "travel_collisions",
     "verify_gcode",
     "verify_roundtrip",
     "version",
     "volume_stats",
+    "voxelize",
 ]
 __version__ = version()

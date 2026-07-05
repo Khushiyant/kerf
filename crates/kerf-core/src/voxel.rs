@@ -3,7 +3,8 @@
 //! [`voxelize`] lifts the per-layer occupancy to voxels on a uniform integer grid (resolution µm on
 //! all three axes; each layer fills the Z range it deposits). On that grid:
 //!  - **Exact 90° rotations** ([`rot_x90`], [`rot_y90`], [`rot_z90`]) are integer index maps — no
-//!    precision loss. Z-90° is denotation-equivariant, extending the translation-invariance property.
+//!    precision loss. Z-90° is denotation-equivariant, extending the translation-invariance property;
+//!    this is machine-checked in `proofs/KerfProofs.lean` (`Kerf.rotation90_invariant`).
 //!  - **Arbitrary X/Y rotations** don't align to the grid, so exact equality is gone. [`rotate_bounds`]
 //!    returns a sound inner (definitely-covered) and outer (possibly-covered) voxel set, which give
 //!    sound verdicts via [`compare_rotated`]: "same within the grid" or "definitely differ" — a
@@ -71,14 +72,17 @@ pub fn rot_y90(v: &Voxels) -> Voxels {
 /// Sound inner (definitely-covered) and outer (possibly-covered) voxel sets after rotating `v` about
 /// an axis by `radians`. `axis_x = true` rotates about X (Y,Z rotate), else about Y (X,Z rotate).
 ///
-/// For each source voxel we transform the eight grid voxels near its rotated image and test them by
-/// mapping their corners back through the inverse rotation: a target voxel is INNER if all its corners
-/// land inside the source voxel (so it is fully covered), and OUTER if any corner does (so it may be
-/// covered). `inner ⊆ true rotation ⊆ outer` by construction.
+/// We reason per *target* voxel. A target voxel's box maps, through the inverse rotation, into a
+/// rotated box in source space; that box lies within the union of the source grid cells its AABB
+/// overlaps. So the target voxel is INNER (definitely covered) when *every* such source cell is in
+/// `v` — coverage by the union of neighbouring source voxels counts, not just containment in a single
+/// one — and OUTER (possibly covered) when *any* is. Candidate target voxels are those the forward
+/// rotation of some source voxel can reach, which is complete for both bounds. `inner ⊆ true rotation
+/// ⊆ outer` by construction, and the AABB is a superset of the true footprint, so inner only shrinks
+/// and outer only grows — never the unsound direction.
 pub fn rotate_bounds(v: &Voxels, radians: f64, axis_x: bool) -> (Voxels, Voxels) {
     let (sin, cos) = radians.sin_cos();
-    // Rotate a point (a is the swept coord along the axis-normal plane's first coord, b the second).
-    // About X: (y,z) rotate; about Y: (x,z) rotate. We rotate the two in-plane axes, keep the third.
+    // Rotate the two in-plane axes, keep the third. About X: (y,z) rotate; about Y: (x,z) rotate.
     let fwd = |x: f64, y: f64, z: f64| -> (f64, f64, f64) {
         if axis_x {
             (x, y * cos - z * sin, y * sin + z * cos)
@@ -93,44 +97,56 @@ pub fn rotate_bounds(v: &Voxels, radians: f64, axis_x: bool) -> (Voxels, Voxels)
             (x * cos - z * sin, y, x * sin + z * cos)
         }
     };
-    let mut inner = Voxels::new();
-    let mut outer = Voxels::new();
-    for &(i, j, k) in v {
-        // Rotated image AABB (in grid units) from the eight rotated corners of this voxel.
+    // AABB in grid units of a mapped voxel's eight corners.
+    let mapped_aabb = |i: i64, j: i64, k: i64, map: &dyn Fn(f64, f64, f64) -> (f64, f64, f64)| {
         let (mut lo3, mut hi3) = ([f64::MAX; 3], [f64::MIN; 3]);
         for &(ci, cj, ck) in &corners(i, j, k) {
-            let (rx, ry, rz) = fwd(ci, cj, ck);
-            for (d, val) in [rx, ry, rz].into_iter().enumerate() {
+            let (mx, my, mz) = map(ci, cj, ck);
+            for (d, val) in [mx, my, mz].into_iter().enumerate() {
                 lo3[d] = lo3[d].min(val);
                 hi3[d] = hi3[d].max(val);
             }
         }
-        let rng = |d: usize| lo3[d].floor() as i64..=hi3[d].ceil() as i64;
-        for ti in rng(0) {
-            for tj in rng(1) {
-                for tk in rng(2) {
-                    // How many of target voxel (ti,tj,tk)'s corners map back into source voxel (i,j,k)?
-                    let mut inside = 0;
-                    for &(cx, cy, cz) in &corners(ti, tj, tk) {
-                        let (bx, by, bz) = inv(cx, cy, cz);
-                        if bx >= i as f64
-                            && bx <= (i + 1) as f64
-                            && by >= j as f64
-                            && by <= (j + 1) as f64
-                            && bz >= k as f64
-                            && bz <= (k + 1) as f64
-                        {
-                            inside += 1;
-                        }
-                    }
-                    if inside > 0 {
-                        outer.insert((ti, tj, tk));
-                    }
-                    if inside == 8 {
-                        inner.insert((ti, tj, tk));
+        (lo3, hi3)
+    };
+
+    // Candidate target voxels: everything the forward rotation of a source voxel can touch. Any
+    // possibly-covered target voxel's preimage overlaps a source voxel, so it lands in here.
+    let mut candidates = Voxels::new();
+    for &(i, j, k) in v {
+        let (lo3, hi3) = mapped_aabb(i, j, k, &fwd);
+        for ti in lo3[0].floor() as i64..hi3[0].ceil() as i64 {
+            for tj in lo3[1].floor() as i64..hi3[1].ceil() as i64 {
+                for tk in lo3[2].floor() as i64..hi3[2].ceil() as i64 {
+                    candidates.insert((ti, tj, tk));
+                }
+            }
+        }
+    }
+
+    let mut inner = Voxels::new();
+    let mut outer = Voxels::new();
+    for &(ti, tj, tk) in &candidates {
+        // Source cells overlapping the inverse-rotated image of this target voxel.
+        let (lo3, hi3) = mapped_aabb(ti, tj, tk, &inv);
+        let mut all_in = true;
+        let mut any_in = false;
+        for si in lo3[0].floor() as i64..=hi3[0].floor() as i64 {
+            for sj in lo3[1].floor() as i64..=hi3[1].floor() as i64 {
+                for sk in lo3[2].floor() as i64..=hi3[2].floor() as i64 {
+                    if v.contains(&(si, sj, sk)) {
+                        any_in = true;
+                    } else {
+                        all_in = false;
                     }
                 }
             }
+        }
+        if any_in {
+            outer.insert((ti, tj, tk));
+        }
+        if all_in {
+            inner.insert((ti, tj, tk));
         }
     }
     (inner, outer)
@@ -153,11 +169,13 @@ fn corners(i: i64, j: i64, k: i64) -> [(f64, f64, f64); 8] {
 /// The sound verdict of comparing `b` against `a` rotated by `radians` about X (or Y).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RotationVerdict {
-    /// Every voxel of `b` is possibly-covered by the rotation and every definitely-covered voxel is in
-    /// `b`: `a` rotated and `b` agree to within the grid's discretization.
+    /// `b` contains every voxel the rotation *definitely* covers and none it *cannot possibly* cover:
+    /// the two are indistinguishable at this grid resolution. Voxels in the undecidable band between
+    /// the inner and outer bounds are allowed either way, so this is "not separable by the grid", not
+    /// proof of exact equality.
     SameWithinGrid,
-    /// `b` has a voxel outside the rotation's outer bound, or misses a definitely-covered voxel: they
-    /// differ by more than the discretization — a sound "definitely differ".
+    /// `b` misses a definitely-covered voxel or holds one the rotation cannot cover: the two differ by
+    /// more than the grid can absorb — a sound "definitely differ".
     DefinitelyDiffer,
 }
 
@@ -274,6 +292,29 @@ mod tests {
         assert_eq!(
             compare_rotated(&a, &a, 0.0, true),
             RotationVerdict::SameWithinGrid
+        );
+    }
+
+    #[test]
+    fn union_coverage_marks_solid_interior_definitely_covered() {
+        // Interior voxels of a rotated solid block are covered by the UNION of several source voxels,
+        // not fully contained in any single one — the earlier corner-in-one-voxel test dropped them,
+        // leaving `inner` near-empty. Union coverage must recover the bulk of the volume.
+        let mut v = Voxels::new();
+        for i in 0..12 {
+            for j in 0..12 {
+                for k in 0..12 {
+                    v.insert((i, j, k));
+                }
+            }
+        }
+        let (inner, outer) = rotate_bounds(&v, 12.0_f64.to_radians(), true);
+        assert!(inner.is_subset(&outer), "inner must be within outer");
+        assert!(
+            inner.len() >= v.len() / 2,
+            "union coverage should mark most of a solid rotated block as definitely covered, got {}/{}",
+            inner.len(),
+            v.len()
         );
     }
 }

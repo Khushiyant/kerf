@@ -74,6 +74,14 @@ fn parse_lo(lo_program_json: &str) -> PyResult<kerf_core::ir::lo::Program> {
     })
 }
 
+fn parse_voxels(voxels_json: &str) -> PyResult<kerf_core::voxel::Voxels> {
+    json::from_json(voxels_json).map_err(|e| {
+        PyValueError::new_err(format!(
+            "expected a voxel-set JSON (array of [i, j, k], e.g. from voxelize()); {e}"
+        ))
+    })
+}
+
 /// Lower a HIGH-LEVEL program (JSON with regions/fills, e.g. from `demo_square_json`) and emit G-code.
 #[pyfunction]
 fn program_to_gcode(hi_program_json: &str) -> PyResult<String> {
@@ -208,6 +216,81 @@ fn rotate_z(lo_program_json: &str, radians: f64) -> PyResult<String> {
     json::to_json(&rotated).map_err(|e| PyValueError::new_err(e.to_string()))
 }
 
+/// Lift a LOW-LEVEL program (JSON) to 3D voxels on a uniform `resolution_um` grid, returned as JSON
+/// (`[[i, j, k], ...]`). Each layer's cells are extruded over the Z range they deposit; layer height
+/// is derived from consecutive Z unless `layer_height_um` is given. The input to the rotation API.
+#[pyfunction]
+#[pyo3(signature = (lo_program_json, resolution_um=200, layer_height_um=None))]
+fn voxelize(
+    lo_program_json: &str,
+    resolution_um: i64,
+    layer_height_um: Option<i64>,
+) -> PyResult<String> {
+    let v = kerf_core::voxel::voxelize(&parse_lo(lo_program_json)?, resolution_um, layer_height_um);
+    json::to_json(&v).map_err(|e| PyValueError::new_err(e.to_string()))
+}
+
+/// Exact 90° rotation (CCW about +X) of a voxel set (JSON, as from `voxelize`). Integer index map,
+/// lossless. See also `rot_y90`, `rot_z90`.
+#[pyfunction]
+fn rot_x90(voxels_json: &str) -> PyResult<String> {
+    let r = kerf_core::voxel::rot_x90(&parse_voxels(voxels_json)?);
+    json::to_json(&r).map_err(|e| PyValueError::new_err(e.to_string()))
+}
+
+/// Exact 90° rotation (CCW about +Y) of a voxel set (JSON). Integer index map, lossless.
+#[pyfunction]
+fn rot_y90(voxels_json: &str) -> PyResult<String> {
+    let r = kerf_core::voxel::rot_y90(&parse_voxels(voxels_json)?);
+    json::to_json(&r).map_err(|e| PyValueError::new_err(e.to_string()))
+}
+
+/// Exact 90° rotation (CCW about +Z) of a voxel set (JSON). Integer index map, lossless — and
+/// denotation-equivariant (proven in `proofs/KerfProofs.lean`).
+#[pyfunction]
+fn rot_z90(voxels_json: &str) -> PyResult<String> {
+    let r = kerf_core::voxel::rot_z90(&parse_voxels(voxels_json)?);
+    json::to_json(&r).map_err(|e| PyValueError::new_err(e.to_string()))
+}
+
+/// Sound (inner, outer) voxel-set bounds for rotating `voxels` (JSON) by `radians` about X
+/// (`axis_x=True`) or Y. Returns `(inner_json, outer_json)`: `inner` is definitely covered, `outer`
+/// possibly covered, with `inner ⊆ true rotation ⊆ outer`. Arbitrary angles don't align to the grid,
+/// so these bracket the answer point-sampling can't bound.
+#[pyfunction]
+#[pyo3(signature = (voxels_json, radians, axis_x=true))]
+fn rotate_bounds(voxels_json: &str, radians: f64, axis_x: bool) -> PyResult<(String, String)> {
+    let (inner, outer) =
+        kerf_core::voxel::rotate_bounds(&parse_voxels(voxels_json)?, radians, axis_x);
+    let inner = json::to_json(&inner).map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let outer = json::to_json(&outer).map_err(|e| PyValueError::new_err(e.to_string()))?;
+    Ok((inner, outer))
+}
+
+/// Sound verdict comparing voxel set `b` against `a` rotated by `radians` about X (`axis_x=True`) or
+/// Y. Returns `"SameWithinGrid"` (indistinguishable at this grid) or `"DefinitelyDiffer"` (differ by
+/// more than the grid can absorb). Both arguments are voxel-set JSON (from `voxelize`).
+#[pyfunction]
+#[pyo3(signature = (a_voxels_json, b_voxels_json, radians, axis_x=true))]
+fn compare_rotated(
+    a_voxels_json: &str,
+    b_voxels_json: &str,
+    radians: f64,
+    axis_x: bool,
+) -> PyResult<String> {
+    let verdict = kerf_core::voxel::compare_rotated(
+        &parse_voxels(a_voxels_json)?,
+        &parse_voxels(b_voxels_json)?,
+        radians,
+        axis_x,
+    );
+    Ok(match verdict {
+        kerf_core::voxel::RotationVerdict::SameWithinGrid => "SameWithinGrid",
+        kerf_core::voxel::RotationVerdict::DefinitelyDiffer => "DefinitelyDiffer",
+    }
+    .to_string())
+}
+
 /// Size and efficiency stats for a program (JSON): layer and toolpath counts and total travel
 /// distance (an efficiency / print-time proxy).
 #[pyfunction]
@@ -295,6 +378,12 @@ fn _kerf(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(graded_diff_gcode, m)?)?;
     // transforms + analyses
     m.add_function(wrap_pyfunction!(rotate_z, m)?)?;
+    m.add_function(wrap_pyfunction!(voxelize, m)?)?;
+    m.add_function(wrap_pyfunction!(rot_x90, m)?)?;
+    m.add_function(wrap_pyfunction!(rot_y90, m)?)?;
+    m.add_function(wrap_pyfunction!(rot_z90, m)?)?;
+    m.add_function(wrap_pyfunction!(rotate_bounds, m)?)?;
+    m.add_function(wrap_pyfunction!(compare_rotated, m)?)?;
     m.add_function(wrap_pyfunction!(occupancy, m)?)?;
     m.add_function(wrap_pyfunction!(program_stats, m)?)?;
     m.add_function(wrap_pyfunction!(deposit_stats, m)?)?;
