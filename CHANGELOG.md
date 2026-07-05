@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.6.0 (2026-07-05)
+
+## [0.6.0](https://github.com/Khushiyant/kerf/compare/v0.5.1...v0.6.0) (2026-07-05)
+
+
+### Features
+
+* **diff:** graded distance transform for smooth material comparison ([0f4eb1f](https://github.com/Khushiyant/kerf/commit/0f4eb1fdf3826d2997fc1a010362e431c246cfbf))
+
+
+
 ## v0.5.1 (2026-07-05)
 
 ### [0.5.1](https://github.com/Khushiyant/kerf/compare/v0.5.0...v0.5.1) (2026-07-05)
