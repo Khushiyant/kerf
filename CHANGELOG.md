@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.5.0 (2026-07-05)
+
+## [0.5.0](https://github.com/Khushiyant/kerf/compare/v0.4.0...v0.5.0) (2026-07-05)
+
+
+### Features
+
+* **core:** analysis toolkit + volume-weighted denotation ([74d5b3b](https://github.com/Khushiyant/kerf/commit/74d5b3b8be725497ce1bdb63e0abad59c0b24ab2))
+
+
+
 ## v0.4.0 (2026-07-05)
 
 ## [0.4.0](https://github.com/Khushiyant/kerf/compare/v0.3.1...v0.4.0) (2026-07-05)
