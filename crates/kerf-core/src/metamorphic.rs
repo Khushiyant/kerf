@@ -34,6 +34,39 @@ pub fn translate(program: &lo::Program, dx: i64, dy: i64) -> lo::Program {
     }
 }
 
+/// Rotate every point of a low-level program about the origin by `radians` (CCW), rounding to integer
+/// microns. Layers (Z) are preserved, since a Z-rotation keeps each layer planar. Arbitrary angles
+/// introduce sub-cell rounding; [`crate::diff::graded_diff_programs`] absorbs it, so `rotate_z`
+/// composes with graded comparison to check agreement up to a known Z-rotation.
+pub fn rotate_z(program: &lo::Program, radians: f64) -> lo::Program {
+    let (sin, cos) = radians.sin_cos();
+    let rot = |p: &Point| {
+        let (x, y) = (p.x as f64, p.y as f64);
+        Point::new(
+            (x * cos - y * sin).round() as i64,
+            (x * sin + y * cos).round() as i64,
+        )
+    };
+    lo::Program {
+        layers: program
+            .layers
+            .iter()
+            .map(|l| lo::Layer {
+                z_um: l.z_um,
+                toolpaths: l
+                    .toolpaths
+                    .iter()
+                    .map(|t| lo::Toolpath {
+                        kind: t.kind,
+                        width_um: t.width_um,
+                        path: Polyline::new(t.path.points.iter().map(rot).collect()),
+                    })
+                    .collect(),
+            })
+            .collect(),
+    }
+}
+
 /// Translation-invariance: translating the program by an exact whole number of raster cells must
 /// shift the occupancy by exactly that many cells and change nothing else.
 ///
@@ -90,6 +123,26 @@ mod tests {
     fn square_is_translation_invariant() {
         assert!(translation_invariant(&square(), 2, 3, 200));
         assert!(translation_invariant(&square(), -5, 7, 300));
+    }
+
+    #[test]
+    fn rotate_z_round_trip_is_near_identity_under_graded_distance() {
+        use crate::diff::graded_diff_programs;
+        let p = square();
+        // Rotate by an arbitrary angle and back; graded distance absorbs the sub-cell rounding.
+        for deg in [15.0_f64, 37.0, 90.0, 123.5] {
+            let th = deg.to_radians();
+            let there_and_back = rotate_z(&rotate_z(&p, th), -th);
+            let g = graded_diff_programs(&p, &there_and_back, 200);
+            assert!(
+                g.mean_um <= 200.0,
+                "deg {deg}: round-trip drifted {} um",
+                g.mean_um
+            );
+        }
+        // A real rotation genuinely moves material (this is a comparison, not an invariance claim).
+        let rotated = rotate_z(&p, 45.0_f64.to_radians());
+        assert!(graded_diff_programs(&p, &rotated, 200).mean_um > 200.0);
     }
 }
 

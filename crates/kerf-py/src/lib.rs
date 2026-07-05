@@ -199,6 +199,15 @@ fn occupancy(program_json: &str, resolution_um: i64) -> PyResult<String> {
     json::to_json(&occ).map_err(|e| PyValueError::new_err(e.to_string()))
 }
 
+/// Rotate a LOW-LEVEL program (JSON) about the origin by `radians` (CCW) in the XY plane, returned as
+/// JSON. Combine with `graded_diff` to compare two prints up to a known Z-rotation (graded distance
+/// absorbs the sub-cell rounding) — e.g. rotation-augmented RL.
+#[pyfunction]
+fn rotate_z(lo_program_json: &str, radians: f64) -> PyResult<String> {
+    let rotated = kerf_core::metamorphic::rotate_z(&parse_lo(lo_program_json)?, radians);
+    json::to_json(&rotated).map_err(|e| PyValueError::new_err(e.to_string()))
+}
+
 /// Size and efficiency stats for a program (JSON): layer and toolpath counts and total travel
 /// distance (an efficiency / print-time proxy).
 #[pyfunction]
@@ -284,7 +293,8 @@ fn _kerf(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(diff_programs, m)?)?;
     m.add_function(wrap_pyfunction!(graded_diff, m)?)?;
     m.add_function(wrap_pyfunction!(graded_diff_gcode, m)?)?;
-    // analyses
+    // transforms + analyses
+    m.add_function(wrap_pyfunction!(rotate_z, m)?)?;
     m.add_function(wrap_pyfunction!(occupancy, m)?)?;
     m.add_function(wrap_pyfunction!(program_stats, m)?)?;
     m.add_function(wrap_pyfunction!(deposit_stats, m)?)?;

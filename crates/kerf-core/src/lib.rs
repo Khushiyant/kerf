@@ -17,6 +17,7 @@ pub mod lower;
 pub mod metamorphic;
 pub mod pass;
 pub mod verify;
+pub mod voxel;
 
 pub use analyze::{
     deposit_stats, program_stats, travel_collisions, volume_stats, DepositStats, LayerCollisions,
@@ -34,6 +35,9 @@ pub use diff::{
 };
 pub use frontend::{parse, ParseReport};
 pub use ir::{hi, lo, Area, ExtrudePath, Point, Polyline, RegionKind};
-pub use metamorphic::{translate, translation_invariant};
+pub use metamorphic::{rotate_z, translate, translation_invariant};
 pub use pass::{preserves_denotation, Identity, Pass, TravelOrder};
 pub use verify::{verify_gcode, verify_roundtrip, GcodeVerification, RoundTrip};
+pub use voxel::{
+    compare_rotated, rot_x90, rot_y90, rot_z90, rotate_bounds, voxelize, RotationVerdict, Voxels,
+};
