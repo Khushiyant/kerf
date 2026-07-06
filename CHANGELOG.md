@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.10.0 (2026-07-06)
+
+## [0.10.0](https://github.com/Khushiyant/kerf/compare/v0.9.1...v0.10.0) (2026-07-06)
+
+
+### Features
+
+* **denote:** incremental material fingerprints for fast preservation verdicts ([d00582b](https://github.com/Khushiyant/kerf/commit/d00582b833feec6651457543265e43e6832919df))
+
+
+
 ## v0.9.1 (2026-07-05)
 
 ### [0.9.1](https://github.com/Khushiyant/kerf/compare/v0.9.0...v0.9.1) (2026-07-05)
