@@ -185,6 +185,24 @@ impl Program {
         hash::canonical_hash(&self.inner)
     }
 
+    /// Incremental 128-bit **material fingerprint** (32-hex) — a microsecond preservation / "same
+    /// material" verdict. Only layers changed since the last call are re-rasterized and re-hashed, so
+    /// after an edit this is orders of magnitude cheaper than `occupancy()` / `iou_to` / `verify_*`.
+    /// Compare two handles' fingerprints (or against a saved reference) to gate an RL step. Equal
+    /// fingerprints mean equal occupancy up to a ~1-in-2^128 collision.
+    fn fingerprint(&mut self) -> String {
+        format!("{:032x}", self.cache.fingerprint(&self.inner))
+    }
+
+    /// Whether this program deposits the same material as `other` — a fast fingerprint compare (both
+    /// caches update incrementally). The constraint check for order-optimization RL.
+    fn same_material(&mut self, other: PyRefMut<'_, Program>) -> bool {
+        let mine = self.cache.fingerprint(&self.inner);
+        let mut other = other;
+        let o = &mut *other;
+        mine == o.cache.fingerprint(&o.inner)
+    }
+
     /// Total travel distance (microns) — a cheap scalar objective.
     fn travel_distance_um(&self) -> f64 {
         self.inner.travel_distance_um()

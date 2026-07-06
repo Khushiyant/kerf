@@ -34,12 +34,64 @@ pub struct LayerOccupancy {
     pub cells: BTreeSet<(i64, i64)>,
 }
 
+impl LayerOccupancy {
+    /// A 64-bit order-independent fingerprint of this layer's deposited material (its z, resolution,
+    /// and occupied cells). Equal fingerprints mean equal occupancy up to a ~1-in-2^64 collision — a
+    /// preservation verdict by hash compare, instead of re-rasterizing and comparing cell sets.
+    /// (`cells` is a `BTreeSet`, so iteration is canonical/sorted and the hash is deterministic.)
+    pub fn fingerprint(&self) -> u64 {
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325; // FNV-1a-64
+        let mut mix = |v: u64| {
+            h ^= v;
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        };
+        mix(self.z_um as u64);
+        mix(self.resolution_um as u64);
+        for &(x, y) in &self.cells {
+            mix(x as u64);
+            mix(y as u64);
+        }
+        h
+    }
+}
+
+/// Combine per-layer fingerprints into a 128-bit program fingerprint (FNV-1a-128 over the layer hashes,
+/// in layer order).
+pub(crate) fn combine_fingerprints(layer_fps: &[u64]) -> u128 {
+    let mut h: u128 = 0x6c62_272e_07bb_0142_62b8_2175_6295_c58d;
+    for &fp in layer_fps {
+        h ^= fp as u128;
+        h = h.wrapping_mul(0x0000_0000_0100_0000_0000_0000_0000_013b);
+    }
+    h
+}
+
 /// Occupancy of a whole program. Two programs denote the same material at this resolution iff their
 /// occupancies are equal.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(Serialize))]
 pub struct Occupancy {
     pub layers: Vec<LayerOccupancy>,
+}
+
+impl Occupancy {
+    /// Per-layer fingerprints (see [`LayerOccupancy::fingerprint`]).
+    pub fn layer_fingerprints(&self) -> Vec<u64> {
+        self.layers.iter().map(|l| l.fingerprint()).collect()
+    }
+
+    /// A 128-bit fingerprint of the whole deposited material. Equal fingerprints mean equal occupancy
+    /// (same layers, same cells) up to collision — a fast "same material" verdict.
+    pub fn fingerprint(&self) -> u128 {
+        combine_fingerprints(&self.layer_fingerprints())
+    }
+}
+
+/// The 128-bit material fingerprint of a low-level program at a resolution — a fast identity for
+/// "deposits the same material". One-shot (rasterizes once); for repeated checks under edits use an
+/// incremental [`crate::incremental::DenoteCache`], which only re-fingerprints changed layers.
+pub fn material_fingerprint(program: &lo::Program, resolution_um: i64) -> u128 {
+    denote_lo(program, resolution_um).fingerprint()
 }
 
 /// Deposit of one layer: how many distinct extruding paths cover each occupied cell (>= 1). Overlap

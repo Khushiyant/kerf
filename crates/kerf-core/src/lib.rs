@@ -36,8 +36,8 @@ pub use analyze::{
 pub use backend::{to_gcode, to_gcode_with, GcodeOptions};
 pub use denote::{
     denote_hi, denote_hi_deposit, denote_hi_volume, denote_lo, denote_lo_deposit, denote_lo_layer,
-    denote_lo_volume, polyline_cells, self_lowering_sound, Deposit, LayerDeposit, LayerOccupancy,
-    LayerVolume, Occupancy, Volume,
+    denote_lo_volume, material_fingerprint, polyline_cells, self_lowering_sound, Deposit,
+    LayerDeposit, LayerOccupancy, LayerVolume, Occupancy, Volume,
 };
 pub use diff::{
     diff_gcode, diff_programs, graded_diff_gcode, graded_diff_programs, GcodeDiff, GradedDiff,

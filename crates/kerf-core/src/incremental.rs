@@ -22,6 +22,7 @@ pub struct DenoteCache {
     resolution_um: i64,
     occ: Occupancy,
     dirty: Vec<bool>,
+    fps: Vec<u64>, // per-layer fingerprints, kept in sync with occ.layers
 }
 
 impl DenoteCache {
@@ -31,6 +32,7 @@ impl DenoteCache {
             resolution_um: resolution_um.max(1),
             occ: Occupancy { layers: Vec::new() },
             dirty: Vec::new(),
+            fps: Vec::new(),
         }
     }
 
@@ -70,6 +72,7 @@ impl DenoteCache {
         if self.occ.layers.len() != program.layers.len() {
             self.occ = denote_lo(program, r);
             self.dirty = vec![false; program.layers.len()];
+            self.fps = self.occ.layer_fingerprints();
             return &self.occ;
         }
         let idxs: Vec<usize> = self
@@ -80,6 +83,7 @@ impl DenoteCache {
             .map(|(i, _)| i)
             .collect();
         for (i, layer) in idxs.iter().copied().zip(compute_dirty(&idxs, program, r)) {
+            self.fps[i] = layer.fingerprint(); // re-fingerprint only the recomputed layer
             self.occ.layers[i] = layer;
             self.dirty[i] = false;
         }
@@ -90,6 +94,15 @@ impl DenoteCache {
     /// need to keep it past the next edit.
     pub fn occupancy_cloned(&mut self, program: &lo::Program) -> Occupancy {
         self.occupancy(program).clone()
+    }
+
+    /// The program's 128-bit **material fingerprint**, maintained incrementally: only layers marked
+    /// dirty since the last call are re-rasterized and re-hashed; the digest is then a combine of the
+    /// cached per-layer hashes. This turns a preservation / "same material" verdict from a full
+    /// re-denote (tens–hundreds of ms) into microseconds — the check an RL env runs every step.
+    pub fn fingerprint(&mut self, program: &lo::Program) -> u128 {
+        let _ = self.occupancy(program); // brings occ + fps up to date (dirty layers only)
+        crate::denote::combine_fingerprints(&self.fps)
     }
 }
 
@@ -154,6 +167,71 @@ mod tests {
 
         // The incremental result is bit-identical to a from-scratch denote.
         assert_eq!(cache.occupancy(&prog), &denote_lo(&prog, 200));
+    }
+
+    #[test]
+    fn incremental_fingerprint_matches_one_shot_and_tracks_edits() {
+        use crate::denote::material_fingerprint;
+        let mut prog = stack(60);
+        let mut cache = DenoteCache::new(200);
+        assert_eq!(cache.fingerprint(&prog), material_fingerprint(&prog, 200));
+
+        // Edit one layer, mark it dirty: the incremental fingerprint re-hashes only that layer and
+        // still equals a from-scratch fingerprint of the edited program.
+        prog.layers[30].toolpaths[0].path =
+            Polyline::new(vec![Point::new(1_000, 2_000), Point::new(8_000, 9_000)]);
+        cache.mark_dirty(30);
+        assert_eq!(cache.fingerprint(&prog), material_fingerprint(&prog, 200));
+    }
+
+    #[test]
+    fn reordering_and_reversing_leave_the_fingerprint_unchanged() {
+        use crate::denote::material_fingerprint;
+        // A layer with several toolpaths; reorder + reverse them. denote is order/reversal-invariant,
+        // so the material fingerprint is identical — the fast preservation verdict for the RL env.
+        let mk = |x: i64, rev: bool| {
+            let mut pts = vec![
+                Point::new(x, 0),
+                Point::new(x + 6_000, 3_000),
+                Point::new(x, 6_000),
+            ];
+            if rev {
+                pts.reverse();
+            }
+            Toolpath::extrude(
+                SegmentKind::Extrude(RegionKind::Infill),
+                Polyline::new(pts),
+                400,
+            )
+        };
+        let base = lo::Program {
+            layers: vec![Layer {
+                z_um: 200,
+                toolpaths: vec![mk(0, false), mk(20_000, false), mk(40_000, false)],
+            }],
+        };
+        let shuffled = lo::Program {
+            layers: vec![Layer {
+                z_um: 200,
+                toolpaths: vec![mk(40_000, true), mk(0, true), mk(20_000, false)],
+            }],
+        };
+        assert_eq!(
+            material_fingerprint(&base, 200),
+            material_fingerprint(&shuffled, 200),
+            "reorder + reverse preserves material, so the fingerprint is unchanged"
+        );
+        // A genuinely different program must differ.
+        let moved = lo::Program {
+            layers: vec![Layer {
+                z_um: 200,
+                toolpaths: vec![mk(0, false), mk(20_000, false), mk(41_000, false)],
+            }],
+        };
+        assert_ne!(
+            material_fingerprint(&base, 200),
+            material_fingerprint(&moved, 200)
+        );
     }
 
     #[test]

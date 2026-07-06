@@ -402,6 +402,19 @@ fn canonical_hash(program_json: &str) -> PyResult<String> {
     Ok(kerf_core::hash::canonical_hash(&parse_lo(program_json)?))
 }
 
+/// 128-bit material fingerprint (32-hex) of a program (JSON) at a resolution — a fast "same deposited
+/// material" identity. Equal fingerprints mean equal occupancy up to collision. For repeated checks
+/// under edits, a `Program` handle's `fingerprint()` maintains this incrementally (only changed layers
+/// re-hashed), turning a per-step preservation verdict from ~100 ms into microseconds.
+#[pyfunction]
+#[pyo3(signature = (program_json, resolution_um=200))]
+fn material_fingerprint(program_json: &str, resolution_um: i64) -> PyResult<String> {
+    Ok(format!(
+        "{:032x}",
+        kerf_core::denote::material_fingerprint(&parse_lo(program_json)?, resolution_um)
+    ))
+}
+
 /// The enumerated legal actions over a program (JSON), returned as a JSON list. Feed one back to
 /// `apply_action` (or a `Program` handle) to edit.
 #[pyfunction]
@@ -601,6 +614,7 @@ fn _kerf(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(preserves_within, m)?)?;
     m.add_function(wrap_pyfunction!(verify_batch, m)?)?;
     m.add_function(wrap_pyfunction!(canonical_hash, m)?)?;
+    m.add_function(wrap_pyfunction!(material_fingerprint, m)?)?;
     // featurization
     m.add_function(wrap_pyfunction!(feature_matrix, m)?)?;
     m.add_function(wrap_pyfunction!(occupancy_grid, m)?)?;
