@@ -106,7 +106,11 @@ def mirror(adapter, instance: Instance, res: int = 200, tol_mean_um: float = 250
     return _graded(expected, actual, res, tol_mean_um, "mirror_x")
 
 
-def translation(adapter, instance: Instance, dx_um: int, dy_um: int, res: int = 200, tol_mean_um: float = 1.0) -> Result:
+def translation(adapter, instance: Instance, dx_um: int, dy_um: int, res: int = 200, tol_mean_um: float = 250.0) -> Result:
+    # Translation is a GRADED isometry: moving the part on the bed must not change the deposited SHAPE.
+    # A real slicer re-rasterizes (and re-centres) each variant, so sub-cell (<1 cell) noise is sound —
+    # use the same sub-cell tolerance as rotation/mirror, not the exact-reference 1µm. A genuine
+    # translation-variance bug (e.g. world-anchored features shifting) is many cells, well past this.
     base = parse(adapter.slice_to_gcode(instance))
     actual = parse(adapter.slice_to_gcode(instance.translate(dx_um, dy_um)))
     return _graded(base, actual, res, tol_mean_um, f"translate_{dx_um}_{dy_um}", cls="GRADED")
@@ -154,9 +158,22 @@ def containment(adapter, instance: Instance, res: int = 200, margin_um: float = 
     # is width/2 + res + a rounding margin. Skirt/brim (mm outside) still trips it; profiles disable them.
     half = getattr(instance, "width_um", 400) / 2.0 + res + margin_um
     lo = parse(adapter.slice_to_gcode(instance))
+    cells = _occupied_cells(lo, res)
+    if not cells:
+        return Result("containment", "GATE", 0.0, 0.0, False, "no material deposited")
+    # Translation-normalize: many slicers auto-place the part on the bed, so the deposited material is
+    # shifted from the footprint's frame. Align by bbox CENTRE (not min-corner): kerf's occupancy is
+    # conservatively dilated ~1 cell on every side, and centre-alignment cancels that symmetric reach
+    # while absorbing a rigid re-position. A true leak still pushes material past the far boundary.
+    xs = [i for i, _ in cells]
+    ys = [j for _, j in cells]
+    dep_cx = (min(xs) + max(xs)) / 2.0 * res + res / 2.0
+    dep_cy = (min(ys) + max(ys)) / 2.0 * res + res / 2.0
+    poly = poly + np.array([dep_cx - (poly[:, 0].min() + poly[:, 0].max()) / 2.0,
+                            dep_cy - (poly[:, 1].min() + poly[:, 1].max()) / 2.0])
     worst = 0.0
     n_out = 0
-    for i, j in _occupied_cells(lo, res):
+    for i, j in cells:
         px, py = i * res + res / 2.0, j * res + res / 2.0
         if _inside(px, py, poly):
             continue

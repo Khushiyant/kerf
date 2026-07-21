@@ -65,6 +65,29 @@ python run.py --random 200 \
 `report.html` lists violations most-severe-first, color-coded by soundness class, each with a minimal
 STL + both G-codes to reproduce. A GATE finding is a hard bug; GRADED/DIRECTIONAL warrant a look.
 
+## Verified against real PrusaSlicer 2.9.6 (macOS)
+
+```bash
+brew install --cask prusaslicer
+BIN=/Applications/PrusaSlicer.app/Contents/MacOS/PrusaSlicer
+"$BIN" --save profile.ini                 # dump a self-contained default profile (bed/nozzle/etc.)
+python -c "from run import sweep; from kerffuzz import corpus; from kerffuzz.adapters import prusaslicer; \
+  sweep([prusaslicer('profile.ini', exe='$BIN')], \
+        [(n,i) for n,i in corpus.boundary_corpus() if i.to_kerf_hi()], outdir='runs/prusa')"
+```
+
+The `prusaslicer` adapter bakes determinism + skirt/brim-off into a copy of the profile (PrusaSlicer
+2.9's CLI does *not* accept those as flags) and auto-centres the part on the bed midpoint. Result over
+the 8 bug-class prisms: **62/64 invariants held** — determinism, all four rotations, mirror, translate,
+and containment clean on 7/8 shapes. The one GATE lead is `acute_wedge` containment (~58µm past the
+bead-inset threshold at a sharp tip: PrusaSlicer under-insets the outer wall there) — a real, minor
+over-reach the oracle is designed to surface, adjudicated by a human, not tolerance-hidden.
+
+Two harness fixes this run surfaced (only a *repositioning* real slicer exposes them): containment is
+now translation-normalized by bbox centre (slicers auto-place the part on the bed), and the `translate`
+relation uses the same sub-cell tolerance as the other isometries (a re-rasterizing slicer has <1-cell
+noise that the exact-reference 1µm tolerance wrongly flagged).
+
 ## Threats to validity (design doc §G)
 World-anchored infill (controlled via profiles), the prism STL caps are convex-only (use the meshgen
 CSG path for concave 3D), and a finding is only as sound as its class. GATE/GRADED are trustworthy;
