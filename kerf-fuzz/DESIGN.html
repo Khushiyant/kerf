@@ -1,0 +1,1053 @@
+<title>kerf slicer fuzzer — design doc</title>
+<style>
+  :root {
+    --paper: #f6f7f9;
+    --panel: #ffffff;
+    --ground: #0e1519;
+    --ink: #18212b;
+    --slate: #56697a;
+    --line: #dde3ea;
+    --line-strong: #c3cdd8;
+    --accent: #1f6feb;
+    --accent-deep: #0b3d91;
+    --sound: #2f8f57;
+    --sound-bg: #e9f4ee;
+    --graded: #b1731a;
+    --graded-bg: #f8f0e2;
+    --unsound: #bd3e2b;
+    --unsound-bg: #f8ebe8;
+    --info: #4f6272;
+    --info-bg: #eceff3;
+
+    --mono: "Menlo", "Andale Mono", "SF Mono", "Courier New", monospace;
+    --sans: "Helvetica Neue", "Helvetica", "Arial", system-ui, sans-serif;
+    --body: "Charter", "Iowan Old Style", "Palatino", "Georgia", serif;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--body);
+    line-height: 1.62;
+    font-size: 17px;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  .wrap {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 0 clamp(20px, 5vw, 64px);
+  }
+
+  /* ---- reading column ---- */
+  .col { max-width: 74ch; }
+
+  /* ================= HERO ================= */
+  header.hero {
+    background: var(--ground);
+    color: #dfe7ee;
+    padding: clamp(52px, 8vw, 104px) 0 clamp(40px, 6vw, 72px);
+    border-bottom: 3px solid var(--accent);
+    position: relative;
+    overflow: hidden;
+  }
+  header.hero canvas {
+    position: absolute; inset: 0;
+    width: 100%; height: 100%;
+    opacity: 0.5;
+  }
+  .hero .wrap { position: relative; z-index: 2; }
+  .hero .eyebrow {
+    font-family: var(--mono);
+    font-size: 12.5px;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: #6fa8ff;
+    margin-bottom: 22px;
+  }
+  .hero h1 {
+    font-family: var(--sans);
+    font-weight: 700;
+    letter-spacing: -0.022em;
+    font-size: clamp(34px, 6vw, 62px);
+    line-height: 1.02;
+    margin: 0 0 24px;
+    text-wrap: balance;
+    max-width: 20ch;
+  }
+  .hero h1 em {
+    font-style: normal;
+    color: #6fa8ff;
+  }
+  .hero .lede {
+    font-size: clamp(17px, 2.1vw, 21px);
+    color: #b3c2d1;
+    max-width: 62ch;
+    line-height: 1.5;
+  }
+  .hero .lede strong { color: #eaf1f7; font-weight: 600; }
+
+  .hero .metarow {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px 12px;
+    margin-top: 34px;
+    font-family: var(--mono);
+    font-size: 12px;
+  }
+  .hero .metarow span {
+    border: 1px solid #2b3945;
+    color: #9fb2c4;
+    padding: 5px 11px;
+    border-radius: 2px;
+    letter-spacing: 0.03em;
+  }
+  .hero .metarow span b { color: #6fa8ff; font-weight: 600; }
+
+  /* ================= THESIS STRIP ================= */
+  .thesis {
+    background: var(--panel);
+    border-bottom: 1px solid var(--line);
+  }
+  .thesis .wrap {
+    padding: 34px 0;
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0;
+  }
+  .thesis .cell {
+    padding: 4px 28px;
+    border-left: 2px solid var(--line);
+  }
+  .thesis .cell:first-child { border-left: none; padding-left: 0; }
+  .thesis .cell .k {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 8px;
+  }
+  .thesis .cell p {
+    margin: 0;
+    font-size: 15px;
+    color: var(--ink);
+    line-height: 1.5;
+  }
+  .thesis .cell p b { font-weight: 600; }
+
+  /* ================= SECTION SCAFFOLD ================= */
+  main { padding: 8px 0 96px; }
+  section { padding: 52px 0 8px; }
+  section + section { border-top: 1px solid var(--line); }
+
+  .sec-head {
+    display: flex;
+    align-items: baseline;
+    gap: 18px;
+    margin-bottom: 8px;
+  }
+  .sec-head .tag {
+    font-family: var(--mono);
+    font-size: 13px;
+    font-weight: 700;
+    color: #fff;
+    background: var(--accent-deep);
+    width: 30px; height: 30px;
+    display: inline-flex; align-items: center; justify-content: center;
+    border-radius: 3px;
+    flex: none;
+    letter-spacing: 0;
+    position: relative;
+    top: 2px;
+  }
+  section h2 {
+    font-family: var(--sans);
+    font-weight: 700;
+    letter-spacing: -0.017em;
+    font-size: clamp(23px, 3.2vw, 31px);
+    line-height: 1.1;
+    margin: 0;
+    text-wrap: balance;
+  }
+  .sec-sub {
+    font-family: var(--sans);
+    color: var(--slate);
+    font-size: 15px;
+    margin: 6px 0 26px 48px;
+    max-width: 70ch;
+  }
+
+  h3 {
+    font-family: var(--sans);
+    font-weight: 650;
+    font-size: 18.5px;
+    letter-spacing: -0.01em;
+    margin: 34px 0 10px;
+    color: var(--ink);
+  }
+  h4 {
+    font-family: var(--mono);
+    font-weight: 600;
+    font-size: 13px;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--slate);
+    margin: 26px 0 10px;
+  }
+
+  p { margin: 0 0 15px; }
+  a { color: var(--accent); text-decoration: none; border-bottom: 1px solid rgba(31,111,235,0.3); }
+  a:hover { border-bottom-color: var(--accent); }
+  strong { font-weight: 600; }
+  code {
+    font-family: var(--mono);
+    font-size: 0.86em;
+    background: #eef1f5;
+    color: #0b3d91;
+    padding: 1px 5px;
+    border-radius: 3px;
+    border: 1px solid #e0e5ec;
+  }
+  ul, ol { margin: 0 0 16px; padding-left: 22px; }
+  li { margin-bottom: 7px; }
+  li::marker { color: var(--slate); }
+
+  .col ul li { padding-left: 2px; }
+
+  /* ================= SOUNDNESS TAXONOMY ================= */
+  .legend {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 14px;
+    margin: 8px 0 30px;
+  }
+  .lg {
+    border: 1px solid var(--line);
+    border-top: 3px solid var(--line);
+    border-radius: 4px;
+    padding: 15px 16px 16px;
+    background: var(--panel);
+  }
+  .lg .name {
+    font-family: var(--mono);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    margin-bottom: 8px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .lg .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+  .lg p { margin: 0; font-size: 13.5px; line-height: 1.45; color: var(--slate); font-family: var(--sans); }
+  .lg.sound   { border-top-color: var(--sound); background: var(--sound-bg); }
+  .lg.graded  { border-top-color: var(--graded); background: var(--graded-bg); }
+  .lg.unsound { border-top-color: var(--unsound); background: var(--unsound-bg); }
+  .lg.info    { border-top-color: var(--info); background: var(--info-bg); }
+  .lg.sound .name, .lg.sound .dot   { color: var(--sound); background-color: initial; }
+  .lg.sound .dot { background: var(--sound); }
+  .lg.graded .name  { color: var(--graded); } .lg.graded .dot { background: var(--graded); }
+  .lg.unsound .name { color: var(--unsound); } .lg.unsound .dot { background: var(--unsound); }
+  .lg.info .name    { color: var(--info); }    .lg.info .dot { background: var(--info); }
+
+  /* ================= CALLOUT / STRIPE BLOCKS ================= */
+  .note {
+    border-left: 4px solid var(--line-strong);
+    background: var(--panel);
+    padding: 16px 20px;
+    margin: 20px 0;
+    border-radius: 0 4px 4px 0;
+    font-size: 15px;
+    font-family: var(--sans);
+    line-height: 1.5;
+  }
+  .note .lbl {
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    display: block;
+    margin-bottom: 6px;
+  }
+  .note.crit    { border-left-color: var(--unsound); background: var(--unsound-bg); }
+  .note.crit .lbl { color: var(--unsound); }
+  .note.warn    { border-left-color: var(--graded); background: var(--graded-bg); }
+  .note.warn .lbl { color: var(--graded); }
+  .note.good    { border-left-color: var(--sound); background: var(--sound-bg); }
+  .note.good .lbl { color: var(--sound); }
+  .note.plain   { border-left-color: var(--accent); background: #eef3fc; }
+  .note.plain .lbl { color: var(--accent-deep); }
+
+  /* ================= ARCHITECTURE PIPELINE ================= */
+  .pipe {
+    display: flex;
+    align-items: stretch;
+    gap: 0;
+    overflow-x: auto;
+    padding: 6px 2px 18px;
+    margin: 4px 0 8px;
+  }
+  .stage {
+    flex: 1 0 148px;
+    min-width: 148px;
+    background: var(--panel);
+    border: 1px solid var(--line-strong);
+    border-radius: 5px;
+    padding: 14px 14px 16px;
+    position: relative;
+  }
+  .stage:not(:last-child) { margin-right: 30px; }
+  .stage:not(:last-child)::after {
+    content: "▸";
+    position: absolute;
+    right: -22px; top: 50%;
+    transform: translateY(-50%);
+    color: var(--accent);
+    font-size: 16px;
+  }
+  .stage .n {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    color: var(--slate);
+    letter-spacing: 0.1em;
+  }
+  .stage .t {
+    font-family: var(--sans);
+    font-weight: 650;
+    font-size: 14.5px;
+    margin: 5px 0 6px;
+    line-height: 1.15;
+  }
+  .stage .d {
+    font-family: var(--sans);
+    font-size: 12px;
+    color: var(--slate);
+    line-height: 1.4;
+  }
+  .stage.oracle { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(31,111,235,0.1); }
+  .stage.oracle .t { color: var(--accent-deep); }
+
+  /* ================= TABLES ================= */
+  .tbl-scroll { overflow-x: auto; margin: 18px 0 10px; border: 1px solid var(--line); border-radius: 5px; }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    font-family: var(--sans);
+    font-size: 13.5px;
+    background: var(--panel);
+  }
+  table.wide { min-width: 940px; }
+  th, td {
+    text-align: left;
+    padding: 10px 13px;
+    border-bottom: 1px solid var(--line);
+    vertical-align: top;
+    line-height: 1.4;
+  }
+  thead th {
+    background: #eef1f5;
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--slate);
+    font-weight: 700;
+    position: sticky; top: 0;
+    border-bottom: 2px solid var(--line-strong);
+  }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:hover { background: #f9fafc; }
+  td code, th code { font-size: 12px; }
+  td .idc {
+    font-family: var(--mono);
+    font-weight: 700;
+    color: var(--accent-deep);
+  }
+  .pill {
+    display: inline-block;
+    font-family: var(--mono);
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    padding: 2px 7px;
+    border-radius: 3px;
+    white-space: nowrap;
+  }
+  .pill.s { background: var(--sound-bg); color: var(--sound); border: 1px solid #bfe0cc; }
+  .pill.g { background: var(--graded-bg); color: var(--graded); border: 1px solid #ecd6ac; }
+  .pill.u { background: var(--unsound-bg); color: var(--unsound); border: 1px solid #eec4bc; }
+  .pill.i { background: var(--info-bg); color: var(--info); border: 1px solid #ccd4dc; }
+  .pill.hi { background: var(--sound-bg); color: var(--sound); border: 1px solid #bfe0cc; }
+  .pill.med { background: var(--graded-bg); color: var(--graded); border: 1px solid #ecd6ac; }
+  .pill.low { background: var(--unsound-bg); color: var(--unsound); border: 1px solid #eec4bc; }
+  td.num { font-variant-numeric: tabular-nums; }
+
+  /* ================= CODE BLOCK ================= */
+  pre {
+    background: var(--ground);
+    color: #d7e0e8;
+    font-family: var(--mono);
+    font-size: 12.8px;
+    line-height: 1.6;
+    padding: 18px 20px;
+    border-radius: 6px;
+    overflow-x: auto;
+    margin: 18px 0;
+    border: 1px solid #1e2a34;
+  }
+  pre code { background: none; border: none; color: inherit; padding: 0; font-size: inherit; }
+  pre .c { color: #6b8299; }        /* comment */
+  pre .k { color: #6fa8ff; }        /* keyword/flag */
+  pre .f { color: #7fd6a8; }        /* function/primitive */
+  pre .s { color: #e0b978; }        /* string/value */
+  pre .p { color: #c98fd6; }        /* punctuation-ish */
+
+  /* ================= ADAPTER CARDS ================= */
+  .adapters { display: flex; flex-direction: column; gap: 22px; margin: 8px 0; }
+  .adapter {
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    overflow: hidden;
+    background: var(--panel);
+  }
+  .adapter .ahead {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    padding: 13px 18px;
+    background: #eef1f5;
+    border-bottom: 1px solid var(--line);
+    flex-wrap: wrap;
+  }
+  .adapter .ahead .anm {
+    font-family: var(--sans); font-weight: 700; font-size: 16px;
+  }
+  .adapter .ahead .anm span { color: var(--slate); font-weight: 400; font-size: 13px; }
+  .adapter .abody { padding: 16px 18px 18px; }
+  .adapter .abody p:first-child { margin-top: 0; }
+
+  /* ================= PHASE TIMELINE ================= */
+  .phases { display: flex; flex-direction: column; gap: 0; margin: 10px 0; }
+  .phase {
+    display: grid;
+    grid-template-columns: 116px 1fr;
+    gap: 22px;
+    padding: 20px 0;
+    border-top: 1px solid var(--line);
+  }
+  .phase:first-child { border-top: none; }
+  .phase .pmeta { }
+  .phase .pnum {
+    font-family: var(--mono); font-size: 12px; font-weight: 700;
+    color: var(--accent); letter-spacing: 0.1em;
+  }
+  .phase .pdep {
+    font-family: var(--mono); font-size: 10.5px;
+    margin-top: 8px; padding: 3px 7px; border-radius: 3px; display: inline-block;
+    letter-spacing: 0.02em;
+  }
+  .phase .pdep.solo { background: var(--sound-bg); color: var(--sound); }
+  .phase .pdep.needs { background: var(--graded-bg); color: var(--graded); }
+  .phase h3 { margin: 0 0 6px; }
+  .phase p { font-family: var(--sans); font-size: 14.5px; margin-bottom: 8px; }
+  .phase ul { font-family: var(--sans); font-size: 14px; margin-bottom: 0; }
+
+  /* ================= TWO-COL ================= */
+  .split { display: grid; grid-template-columns: 1fr 1fr; gap: 30px; margin: 8px 0; }
+  .split h3 { margin-top: 0; }
+  .split ul { font-family: var(--sans); font-size: 14.5px; }
+
+  /* ================= FOOTER ================= */
+  footer {
+    background: var(--ground);
+    color: #8ea1b3;
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 1.7;
+    padding: 40px 0;
+  }
+  footer .wrap { display: flex; flex-wrap: wrap; gap: 30px; justify-content: space-between; }
+  footer a { color: #6fa8ff; border: none; }
+  footer .src { max-width: 60ch; }
+  footer h5 { color: #cdd9e3; font-family: var(--sans); font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase; margin: 0 0 10px; }
+
+  .kicker {
+    font-family: var(--mono); font-size: 11px; letter-spacing: 0.16em;
+    text-transform: uppercase; color: var(--accent); margin: 30px 0 4px;
+  }
+
+  @media (max-width: 860px) {
+    .thesis .wrap { grid-template-columns: 1fr; gap: 20px; }
+    .thesis .cell { border-left: none; padding: 0; border-top: 1px solid var(--line); padding-top: 16px; }
+    .thesis .cell:first-child { border-top: none; padding-top: 0; }
+    .legend { grid-template-columns: 1fr 1fr; }
+    .split { grid-template-columns: 1fr; }
+    .phase { grid-template-columns: 1fr; gap: 8px; }
+    .sec-sub { margin-left: 0; }
+  }
+  @media (max-width: 520px) {
+    .legend { grid-template-columns: 1fr; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+  a:focus-visible, th:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+</style>
+
+<header class="hero">
+  <canvas id="lattice" aria-hidden="true"></canvas>
+  <div class="wrap">
+    <div class="eyebrow">Design Document · Verified Oracle Fuzzing</div>
+    <h1>A slicer fuzzer built on <em>kerf</em>, the semantic oracle the mesh&rarr;G&#8209;code compiler never had.</h1>
+    <p class="lede">Mainstream slicers &mdash; PrusaSlicer, CuraEngine, OrcaSlicer &mdash; are compilers from solid geometry to machine code, yet they have had neither a <strong>Csmith</strong> (a generator of well-defined inputs) nor an <strong>EMI</strong>-style equivalence oracle. kerf supplies both halves: a per-layer deposited-material denotation with <strong>machine-checked metamorphic invariants</strong>, driving an unbounded metamorphic + differential fuzzing loop that finds real bugs.</p>
+    <div class="metrow metarow">
+      <span>oracle · <b>denote_lo → Occupancy</b></span>
+      <span>proven · <b>P1–P4 (Lean&nbsp;4)</b></span>
+      <span>targets · <b>Prusa 2.9.6 · Cura 5.13 · Orca</b></span>
+      <span>core relation · <b>metamorphic self-comparison</b></span>
+    </div>
+  </div>
+</header>
+
+<div class="thesis">
+  <div class="wrap">
+    <div class="cell">
+      <div class="k">The gap</div>
+      <p>Slicers have no reference semantics, so bugs hide as "plausible G-code." <b>GlitchFinder (OOPSLA&nbsp;2025)</b> took the first step — differential-only, over a fixed 58-model corpus.</p>
+    </div>
+    <div class="cell">
+      <div class="k">The unlock</div>
+      <p>kerf <b>denotes</b> G-code to per-layer occupancy and <b>proves</b> that occupancy is translation- and rotation-equivariant. That makes an EMI-style metamorphic oracle possible.</p>
+    </div>
+    <div class="cell">
+      <div class="k">The discipline</div>
+      <p>Every verdict is <b>modulo resolution r</b>, graded not binary where rounding bites, and gated on a determinism check. Skepticism about false positives is the whole design.</p>
+    </div>
+  </div>
+</div>
+
+<main class="wrap">
+
+  <!-- ============================================ A ============================================ -->
+  <section id="architecture">
+    <div class="sec-head"><span class="tag">A</span><h2>Architecture</h2></div>
+    <p class="sec-sub">A single feedback loop: generate or mutate a mesh, apply an isometry, drive it through pluggable slicer adapters, denote each output with kerf, check the invariant, then shrink and report any surviving violation.</p>
+
+    <div class="pipe" role="img" aria-label="Pipeline from mesh generation through kerf oracle to report">
+      <div class="stage">
+        <div class="n">01 · SOURCE</div>
+        <div class="t">Mesh gen / mutate</div>
+        <div class="d">CSG primitives via manifold3d; valid-by-construction, watertight. Boundary-targeted parameter sweeps.</div>
+      </div>
+      <div class="stage">
+        <div class="n">02 · TRANSFORM</div>
+        <div class="t">Isometry</div>
+        <div class="d">Whole-cell translate, 90°/arbitrary-Z rotate, mirror. Applied at mesh <em>and</em> at parsed-program level.</div>
+      </div>
+      <div class="stage">
+        <div class="n">03 · COMPILE</div>
+        <div class="t">Slicer adapters</div>
+        <div class="d">Pluggable: Prusa / Cura / Orca. One control profile, one binary per pair, pinned determinism flags.</div>
+      </div>
+      <div class="stage oracle">
+        <div class="n">04 · ORACLE</div>
+        <div class="t">kerf parse + denote</div>
+        <div class="d">G-code → lo::Program → Occupancy / Deposit / Volume / Flow, matched by layer Z.</div>
+      </div>
+      <div class="stage">
+        <div class="n">05 · CHECK</div>
+        <div class="t">Invariant</div>
+        <div class="d">Exact fingerprint, graded EDT distance, or IoU vs the relation's tolerance ε.</div>
+      </div>
+      <div class="stage">
+        <div class="n">06 · REDUCE</div>
+        <div class="t">Shrinker → report</div>
+        <div class="d">Delta-debug faces to a minimal witness; attribute which denotation moved.</div>
+      </div>
+    </div>
+
+    <div class="col">
+      <h3>Two loops share one oracle</h3>
+      <p>The <strong>metamorphic loop</strong> compares a slicer against <em>itself</em> under a geometric symmetry — this is the sound core, because it eliminates the entire class of "legitimate slicer choice" false positives (seam, infill pattern, wall order) that a naive differential harness drowns in. The <strong>differential loop</strong> compares two slicers on the same mesh, but only on what geometry <em>forces</em> — the outer shell envelope — as a graded containment check.</p>
+      <p>Both consume the same <code>parse() → denote_lo</code> path. The oracle sees the set of raster cells that extruding toolpaths' swept capsules (polyline &oplus; disk of <code>width_um</code>) touch, unioned per layer and matched <strong>by layer Z, not by line order</strong>. That order-insensitivity is what lets it survive path reordering, arc-vs-segment representation, and multithread scheduling — differences that are real in the bytes but semantically empty.</p>
+
+      <div class="note plain">
+        <span class="lbl">Design invariant</span>
+        No stage ever fires a verdict on a difference that lives only in <em>re-inferred</em> metadata. Toolpath <code>role</code> and <code>width</code> are re-inferred by the parser from <code>;TYPE:</code> / <code>;WIDTH:</code> comments and are untrusted. Before any relation is admitted, the harness checks kerf <code>Diagnostics</code>: if <code>fallback_role_moves</code>, <code>estimated_width_moves</code>, or <code>unknown_roles</code> touch the cells in question, the "bug" is inadmissible.
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================ B ============================================ -->
+  <section id="invariants">
+    <div class="sec-head"><span class="tag">B</span><h2>The sound invariant set</h2></div>
+    <p class="sec-sub">Every relation is filed under a soundness class and carries its own false-positive controls. A "DIFFER" verdict is only as trustworthy as the class it comes from — and only as sharp as the resolution r it was measured at.</p>
+
+    <div class="legend">
+      <div class="lg sound">
+        <div class="name"><span class="dot"></span>SOUND-EXACT</div>
+        <p>Transform is a true symmetry of the physical part; kerf backs it with an exact integer relation. A violation beyond tolerance is <em>necessarily</em> a slicer defect.</p>
+      </div>
+      <div class="lg graded">
+        <div class="name"><span class="dot"></span>SOUND-GRADED</div>
+        <p>Sound in principle, but the transform induces sub-cell rounding. Obligation is <code>p95_um&nbsp;≤&nbsp;ε</code>, not exact equality. Report near-misses; flag only past ε.</p>
+      </div>
+      <div class="lg unsound">
+        <div class="name"><span class="dot"></span>DIRECTIONAL</div>
+        <p>Transform legitimately changes the denotation in a <em>predicted</em> way (volume scales). Sound only as a monotonicity / conservation law — never as equality.</p>
+      </div>
+      <div class="lg info">
+        <div class="name"><span class="dot"></span>GATE</div>
+        <p>Not a bug detector. The precondition (determinism) that every other verdict depends on. If it fails, downstream results are uninterpretable.</p>
+      </div>
+    </div>
+
+    <div class="col">
+      <div class="note crit">
+        <span class="lbl">The one load-bearing caveat</span>
+        Every verdict is <strong>modulo resolution r</strong>. "SAME" means "same deposited material up to r"; "DIFFER" means separable at r. Cell inclusion is <em>conservative coverage</em> (a capsule reaching within a cell's circumradius <code>r/√2</code> includes it), so a feature is never missed when r ≤ its width — the oracle over-includes, never under-includes. Choose <code>resolution_um</code> ≤ the smallest feature you are willing to call a bug.
+      </div>
+    </div>
+
+    <h3>Metamorphic relations &mdash; the sound core</h3>
+    <div class="tbl-scroll">
+      <table class="wide">
+        <thead>
+          <tr>
+            <th>ID</th><th>Transform</th><th>kerf primitive</th><th>Class</th><th>Tolerance</th><th>Bug iff</th><th>Primary FP control</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span class="idc">M0</span></td>
+            <td>none — re-slice ×2</td>
+            <td><code>material_fingerprint</code> / <code>canonical_hash</code></td>
+            <td><span class="pill i">GATE</span></td>
+            <td class="num">exact</td>
+            <td>fingerprints differ under controls</td>
+            <td>all of §D controls</td>
+          </tr>
+          <tr>
+            <td><span class="idc">M1-int</span></td>
+            <td>translate(prog, Δ), whole-cell</td>
+            <td><code>translation_invariant</code> <em>(Lean P2)</em></td>
+            <td><span class="pill s">EXACT</span></td>
+            <td class="num">exact</td>
+            <td>invariant false</td>
+            <td>— (tests the parser)</td>
+          </tr>
+          <tr>
+            <td><span class="idc">M1-e2e</span></td>
+            <td><code>--center</code>, whole-cell Δ</td>
+            <td><code>diff_programs(translate(G),G′).identical</code></td>
+            <td><span class="pill s">EXACT</span></td>
+            <td class="num">exact</td>
+            <td>not identical</td>
+            <td><code>--dont-arrange</code>, brim off</td>
+          </tr>
+          <tr>
+            <td><span class="idc">M2a</span></td>
+            <td><code>--rotate 90/180/270</code></td>
+            <td><code>voxelize</code> + <code>rot_z90</code> <em>(Lean)</em></td>
+            <td><span class="pill s">EXACT</span></td>
+            <td class="num">exact index map</td>
+            <td>voxelize(G′) ≠ rot_z90(voxelize(G))</td>
+            <td>infill-angle framing; solid mask</td>
+          </tr>
+          <tr>
+            <td><span class="idc">M2b</span></td>
+            <td><code>--rotate θ</code> (arbitrary)</td>
+            <td><code>rotate_z</code> + <code>graded_diff_programs</code></td>
+            <td><span class="pill g">GRADED</span></td>
+            <td class="num">p95 ≤ r + ~3µm</td>
+            <td>p95 exceeds, at two resolutions</td>
+            <td>seam; solid mask</td>
+          </tr>
+          <tr>
+            <td><span class="idc">M3</span></td>
+            <td><code>--rotate-x/-y θ</code></td>
+            <td><code>rotate_bounds</code> + <code>compare_rotated</code></td>
+            <td><span class="pill g">GRADED¹</span></td>
+            <td class="num">DefinitelyDiffer</td>
+            <td>verdict = DefinitelyDiffer</td>
+            <td>supports off, adaptive off</td>
+          </tr>
+          <tr>
+            <td><span class="idc">M4</span></td>
+            <td>mirror (<code>--scale-x -1</code> / STL)</td>
+            <td>harness reflect + <code>diff_programs</code></td>
+            <td><span class="pill s">EXACT</span></td>
+            <td class="num">exact (axis negate)</td>
+            <td>reflected occupancy ≠</td>
+            <td>seam side; solid mask</td>
+          </tr>
+          <tr>
+            <td><span class="idc">M5a</span></td>
+            <td><code>--scale s</code></td>
+            <td><code>volume_stats</code></td>
+            <td><span class="pill u">DIRECTIONAL</span></td>
+            <td class="num">volume ∝ s²‥s³</td>
+            <td>volume not monotone / wrong power</td>
+            <td>never run as equality</td>
+          </tr>
+          <tr>
+            <td><span class="idc">M5b</span></td>
+            <td>layer-height change</td>
+            <td><code>volume_stats</code> total</td>
+            <td><span class="pill u">DIRECTIONAL</span></td>
+            <td class="num">total vol conserved</td>
+            <td>total vol shifts beyond quant band</td>
+            <td>Z's disjoint — no per-layer diff</td>
+          </tr>
+          <tr>
+            <td><span class="idc">M5c</span></td>
+            <td>width / flow-mult change</td>
+            <td><code>volume_stats</code>, <code>e_conserved</code></td>
+            <td><span class="pill u">DIRECTIONAL</span></td>
+            <td class="num">vol/flow track command</td>
+            <td>footprint moves / vol doesn't track</td>
+            <td>—</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="sec-sub" style="margin-left:0; margin-top:2px;">¹ M3's <code>DefinitelyDiffer</code> is <em>one-sided</em> sound: it fires only when the rotated occupancy misses a definitely-covered voxel. <code>SameWithinGrid</code> is "not separable by the grid," not proof of equality. M3 is low-yield — an X/Y rotation changes overhangs and layer slicing, so it is <em>not</em> a symmetry of the sliced part unless supports are off and none are needed.</p>
+
+    <div class="col">
+      <h3>Why the core is metamorphic, not differential</h3>
+      <p>M1, M2a, and M4 rest on relations kerf has <strong>proved</strong> — translation-invariance (P2) and 90° rotation-invariance are machine-checked in Lean 4, and reversal-invariance (P1) is why occupancy survives a mirror's direction flip. The relation's soundness therefore reduces to the physical symmetry argument, <em>not</em> to trusting kerf's rasterizer code. That is a stronger footing than any cross-slicer comparison can offer.</p>
+
+      <div class="note warn">
+        <span class="lbl">Traps — unsound as equality</span>
+        <strong>Never</strong> compare full-program occupancy across a scale (M5a), a layer-height change (M5b), or two different slicers. Scaling changes volume by design; a layer-height change makes the Z's disjoint (kerf correctly reports them as non-overlapping); and two correct slicers differ legitimately on infill, seam, support, and arc representation. These are conservation laws, not equalities.
+      </div>
+
+      <h4>Per-relation false-positive controls</h4>
+      <ul>
+        <li><strong>M1-e2e:</strong> shift by a <em>whole number of cells</em> only (Δ = c·r µm) — a non-cell-multiple shift aliases the grid and is not a clean relation. Keep the translated part fully on-bed; an off-bed clamp is legitimate.</li>
+        <li><strong>M2a / M2b:</strong> infill <em>angle</em> is world-referenced in every slicer, so a fixed angle after rotation yields a rotated pattern that is <em>not</em> the rotation of the original infill. Restrict to the deterministic solid region (perimeters + skin), or set infill to co-rotate (Orca <code>align_infill_direction_to_model=true</code>), or raise density to 100%.</li>
+        <li><strong>M2b budget:</strong> ε must cover rasterization at r, the ≤1µm per-vertex rounding <code>rotate_z</code> applies, and the slicer's own µm quantization. Defensible: <code>ε = r + 2·√2·1µm ≈ r + 3µm</code>, checked on <code>p95_um</code>.</li>
+        <li><strong>M4:</strong> reflection flips chirality — seam <em>side</em>, wall travel direction, infill phase. Occupancy is direction-agnostic so it survives, but mask the seam. <strong>Honesty note:</strong> kerf ships no native <code>reflect</code> primitive — the axis-negation map is a ~10-line harness helper; only the comparison is a kerf primitive.</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- ============================================ C ============================================ -->
+  <section id="adapters">
+    <div class="sec-head"><span class="tag">C</span><h2>Per-slicer adapter templates</h2></div>
+    <p class="sec-sub">Verified command templates and determinism flags. Low-confidence items are flagged inline — config keys must be re-confirmed against the exact build's <code>--help-fff</code> / <code>settings.def.json</code> at harness-setup time; slicers drop and rename keys between releases.</p>
+
+    <div class="adapters">
+
+      <div class="adapter">
+        <div class="ahead">
+          <div class="anm">PrusaSlicer <span>2.9.6 stable · Jun 2026</span></div>
+          <span class="pill hi">confidence: high</span>
+        </div>
+        <div class="abody">
+          <p>An action is <strong>required</strong> — <code>--export-gcode</code> (unlike old Slic3r, a bare STL does nothing). On Windows use <code>prusa-slicer-console.exe</code>. Compare only G-code from the <em>same binary on the same machine</em>; cross-build float drift will false-fail byte comparisons.</p>
+<pre><code><span class="k">prusa-slicer</span> --export-gcode --load PROFILE.ini --output OUT.gcode <span class="p">\</span>
+  <span class="k">--dont-arrange</span> --center 100,100 <span class="k">--threads 1</span> <span class="p">\</span>
+  <span class="k">--arc-fitting</span> disabled <span class="k">--fill-pattern</span> concentric <span class="p">\</span>
+  <span class="k">--seam-position</span> random --resolution 0 --gcode-resolution 0.0125 <span class="p">\</span>
+  --spiral-vase 0 INPUT.stl</code></pre>
+          <p><strong>Determinism:</strong> <code>--threads 1</code> (default is auto = hardware concurrency — the #1 cross-host non-reproducibility source). <code>--arc-fitting disabled</code> keeps all extrusion as straight G1. <code>--dont-arrange</code> stops the packer jostling the model. For isometry pairs, prefer <code>--fill-pattern concentric</code> (co-rotates with the part) and <code>--seam-position random</code> (fixed seed <code>1653710332u</code>, fractional arc-length — rotates <em>with</em> geometry) over the world-anchored defaults <code>stars</code> / <code>aligned</code>.</p>
+          <div class="note warn" style="margin-bottom:0;">
+            <span class="lbl">Corrected — flagged low-confidence</span>
+            <code>--loglevel</code>: master source and the man page <em>disagree by inversion</em>. Source semantics say <code>2 = warning</code> (not "info"); use <code>3</code> if you actually want info. Does not affect G-code bytes — verify on your build with <code>--help</code>. Also: the widely-cited PrusaSlicer issue <code>#7453</code> ("stray G3") is <strong>miscited</strong> — that issue is unrelated; keep arc-fitting off regardless.
+          </div>
+        </div>
+      </div>
+
+      <div class="adapter">
+        <div class="ahead">
+          <div class="anm">CuraEngine <span>Cura 5.13 latest · engine built from main</span></div>
+          <span class="pill hi">confidence: high</span>
+        </div>
+        <div class="abody">
+          <p>No official standalone binary — build via Conan or extract from a matching Cura install; keep engine and definitions version-matched. You <strong>must</strong> <code>-j fdmprinter.def.json</code> before any <code>-s</code> that references a key, or 5.x aborts with <em>"Trying to retrieve setting with no value given"</em> (the #1 empty-gcode cause). Argument order matters: <code>-s</code> applies to the last scope selected by <code>-e</code>/<code>-l</code>/<code>-g</code>.</p>
+<pre><code><span class="k">CuraEngine</span> slice -v <span class="k">-m1</span> -j &lt;dir&gt;/fdmprinter.def.json -d &lt;dir&gt; <span class="p">\</span>
+  -s adaptive_layer_height_enabled=false -s coasting_enable=false <span class="p">\</span>
+  -s z_seam_type=back -s z_seam_relative=true <span class="p">\</span>
+  <span class="s">-s magic_fuzzy_skin_enabled=false</span>  <span class="c"># NOT fuzzy_skin_enabled</span> <span class="p">\</span>
+  -s infill_pattern=grid -s infill_offset_x=0 -s infill_offset_y=0 <span class="p">\</span>
+  <span class="s">-s connect_infill_polygons=false</span>  <span class="c"># real default is TRUE</span> <span class="p">\</span>
+  -s center_object=false -s mesh_position_x=0 <span class="p">\</span>
+  -e0 -l model.stl -o out.gcode</code></pre>
+          <p>Emits only G0/G1 — there is <em>no</em> native arc setting (<code>magic_arcs</code> does not exist; G2/G3 arise only via the external ArcWelder plugin, so leave it out). Works in integer microns internally, so expect sub-cell rounding on ~45° rotations — exactly what M2b's graded distance absorbs. Feed transforms through <code>mesh_rotation_matrix</code> or a pre-transformed STL and keep <code>center_object=false</code>.</p>
+          <div class="note crit" style="margin-bottom:0;">
+            <span class="lbl">Corrections that would otherwise silently break the harness</span>
+            The fuzzy-skin key is <code>magic_fuzzy_skin_enabled</code> — the bare <code>fuzzy_skin_enabled</code> is an unknown key and has <em>no effect</em>. <code>connect_infill_polygons</code> defaults to <strong>true</strong>, so set it false explicitly. Also consider the single-file resolved-profile path <code>-r resolved.json</code> instead of the <code>-j</code>+<code>-s</code> merge.
+          </div>
+        </div>
+      </div>
+
+      <div class="adapter">
+        <div class="ahead">
+          <div class="anm">OrcaSlicer / Bambu Studio <span>shared CLI · SoftFever main</span></div>
+          <span class="pill med">confidence: high, w/ caveats</span>
+        </div>
+        <div class="abody">
+          <p>There is <strong>no</strong> <code>--export-gcode</code> flag (commented out in source). Plain G-code appears only when <code>--outputdir</code> is set (writes <code>plate_N.gcode</code>); otherwise it is buried in <code>--export-3mf</code> as <code>Metadata/plate_1.gcode</code>. No <code>--threads</code> flag — pin TBB with <code>taskset -c 0</code> on Linux. Presets use <code>inherits</code> chains; a raw child JSON is incomplete — flatten inheritance yourself.</p>
+<pre><code><span class="k">taskset -c 0</span> "$ORCA" --slice 0 <span class="p">\</span>
+  --load-settings <span class="s">"$MACHINE_JSON;$PROCESS_JSON"</span> <span class="p">\</span>
+  --load-filaments <span class="s">"$FILA_JSON"</span> --outputdir "$OUTDIR" <span class="k">--debug 2</span> input.stl
+<span class="c"># → $OUTDIR/plate_1.gcode  (+ result.json on Linux only)</span></code></pre>
+          <p><strong>Determinism keys (in process JSON):</strong> <code>enable_arc_fitting=false</code>, <code>seam_position=aligned</code> (never <code>random</code>), <code>fuzzy_skin=none</code>, and <code>align_infill_direction_to_model=true</code> so infill co-rotates (default is <em>false</em> = world-anchored). Use <code>--arrange 0</code> and omit <code>--orient</code>; use <code>--rotate θ</code> for an exact Z rotation.</p>
+          <div class="note warn" style="margin-bottom:0;">
+            <span class="lbl">Three corrections vs. the raw report</span>
+            (1) <code>--load-settings</code> order is <em>not</em> load-bearing — files dispatch by their internal <code>type</code> field, not CLI position; supply one machine-typed and one process-typed JSON. (2) <code>--no-check</code> disables <em>validity checks</em> (incl. the G-code path-conflict detector — a bug class you may want) — do <strong>not</strong> pass it reflexively. (3) <code>result.json</code> is written on <strong>Linux only</strong>; run the harness on Linux/WSL. Avoid multi-material painted 3MFs (segfault, issue #12426).
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ============================================ D ============================================ -->
+  <section id="validate">
+    <div class="sec-head"><span class="tag">D</span><h2>Validating the harness with zero external slicers</h2></div>
+    <p class="sec-sub">Before pointing the fuzzer at any real slicer, prove the harness itself is correct — using kerf's own <code>lower → G-code</code> emitter as a reference "slicer" whose metamorphic relations must pass <em>exactly</em>.</p>
+
+    <div class="col">
+      <p>kerf can emit G-code from its own <code>lo::Program</code> (guarded per-program by <code>verify_roundtrip</code>). Treat that emitter as a fourth, in-process slicer adapter. Because it is deterministic and its geometry is exactly what kerf denotes, it is the ideal oracle-under-test: <strong>every SOUND-EXACT metamorphic relation must pass bit-exactly on it, and every graded relation must pass at <code>max_um = 0</code> for whole-cell / 90° transforms.</strong> Any failure is a harness bug — in the transform composition, the region mask, the diff wiring, or the fingerprint — not a slicer bug.</p>
+
+      <h4>The self-test matrix</h4>
+      <ul>
+        <li><strong>M0 must be trivially exact:</strong> re-emitting the same program twice yields identical <code>material_fingerprint</code>. If not, the emitter or hash is nondeterministic — stop.</li>
+        <li><strong>M1-int is a proven tautology:</strong> <code>translation_invariant</code> holds by Lean P2, so a failure means the harness applied <code>translate</code> or read <code>Occupancy</code> incorrectly.</li>
+        <li><strong>M2a must be exact index-permutation:</strong> <code>voxelize(reference(rot90(mesh))) == rot_z90(voxelize(reference(mesh)))</code>. This exercises the whole voxelize + rotate + compare path with a known-good answer.</li>
+        <li><strong>M4 round-trip:</strong> reflect twice = identity; the harness reflection helper must compose to <code>diff.identical</code> against the original.</li>
+        <li><strong>Round-trip metric floor:</strong> <code>rotate_z(rotate_z(p, θ), −θ)</code> must land at <code>mean_um ≤ r</code> — the same bound kerf's own property tests assert.</li>
+      </ul>
+
+      <div class="note good">
+        <span class="lbl">Why this matters</span>
+        This gives a full CI gate with <strong>no external dependencies</strong>. A green self-test suite means the shrinker, the region masker, the isometry composition, and the tolerance math are all sound; only then is a "DIFFER" against PrusaSlicer attributable to PrusaSlicer. It also directly validates the differential machinery: two reference re-emissions of the same program must yield <code>IoU = 1.0</code> and <code>max_um = 0</code> on the shell mask.
+      </div>
+
+      <p>Second use: <strong>mutation testing of the harness.</strong> Deliberately perturb a reference program (drop a path, shift one cell, widen a bead) and confirm each relation fires with the <em>expected</em> verdict and severity — occupancy for a dropped path, <code>volume_stats</code> for a widened bead, <code>deposit_stats</code> for a duplicated path. This calibrates the "which denotation moved" attribution before it is trusted on real bugs.</p>
+    </div>
+  </section>
+
+  <!-- ============================================ E ============================================ -->
+  <section id="targets">
+    <div class="sec-head"><span class="tag">E</span><h2>Bug-class targets &amp; mesh generation</h2></div>
+    <p class="sec-sub">What to hunt, why kerf can see it, and how to generate the inputs that provoke it. Generate at the CSG level and export valid STL — byte-fuzzing STL is rejected ~65% of the time as invalid.</p>
+
+    <div class="split">
+      <div>
+        <h3>Bug-class targets</h3>
+        <div class="tbl-scroll">
+          <table>
+            <thead><tr><th>Class</th><th>Oracle signal</th><th>Yield</th></tr></thead>
+            <tbody>
+              <tr><td>Thin walls / small features below nozzle width</td><td>feature in mesh occupancy, absent in G-code → low IoU / large graded distance</td><td><span class="pill hi">high</span></td></tr>
+              <tr><td>Slicer crash on valid geometry</td><td>oracle-free (crash = bug); stress infill / modifier / layer-boundary</td><td><span class="pill hi">high</span></td></tr>
+              <tr><td>Missing / unsupported solid infill</td><td>occupancy present/absent where mesh predicts otherwise</td><td><span class="pill hi">high</span></td></tr>
+              <tr><td>Orientation-dependent planning</td><td>M2a/M2b — occupancy ≠ rotation of original</td><td><span class="pill med">med</span></td></tr>
+              <tr><td>Sharp overhang / bridging boundary</td><td>per-layer occupancy mismatch on overhang layers</td><td><span class="pill med">med</span></td></tr>
+              <tr><td>Repair-tool error injection (MeshLab, Meshmixer)</td><td>occupancy change from clean→repaired mesh</td><td><span class="pill med">med</span></td></tr>
+              <tr><td>Extreme / off-origin coordinates</td><td>M1 — occupancy should shift, not distort</td><td><span class="pill low">low</span></td></tr>
+              <tr><td>Arc / G2-G3 handling</td><td>same mesh, arc-on vs linearized — settings-level metamorphic</td><td><span class="pill low">low</span></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div>
+        <h3>Mesh generation strategy</h3>
+        <p>Build the "Csmith for meshes": compose boxes, cylinders, spheres and extrusions via boolean union / difference / intersection with randomized parameters, using <strong>manifold3d</strong> as the backend so every CSG output is provably manifold by construction. Gate validity with <strong>trimesh</strong> (<code>is_watertight</code>, <code>is_winding_consistent</code>, degeneracy checks).</p>
+        <ul>
+          <li><strong>Valid-by-construction track:</strong> watertight, manifold, features &gt; nozzle width — so a divergence is unambiguously a bug (the Csmith "avoid undefined behavior" analogue).</li>
+          <li><strong>Boundary-targeted sweeps:</strong> sweep wall thickness across nozzle width, overhang angle across the bridging threshold — bisects the exact point a slicer drops a feature, yielding crisp reports.</li>
+          <li><strong>Semantics-preserving mutations</strong> (the EMI analogue): rigid translate, 90°/Z rotate, remesh a face, insert redundant vertices, merge coplanar faces — occupancy must not move past tolerance.</li>
+          <li><strong>Malformed track</strong> (robustness only): vertex jitter into self-intersection, hole creation, normal flips, sliver-triangle injection.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="col">
+      <div class="note plain">
+        <span class="lbl">Region masking makes E&nbsp;+&nbsp;B work together</span>
+        Confine M2a/M2b/M4 and the differential shell check to the deterministic region: filter <code>lo::Program</code> toolpaths to <code>kind ∈ {Perimeter, Skin}</code>, drop <code>Infill</code>/<code>Support</code>, then diff. This removes infill-pattern and support freedom as false-positive sources — but only mask on roles the parser <em>knew</em> (from a recognized <code>;TYPE:</code> token, not a <code>fallback_role_move</code>). If roles were guessed, fall back to a whole-program graded comparison with wider ε, or skip the config.
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================ F ============================================ -->
+  <section id="phases">
+    <div class="sec-head"><span class="tag">F</span><h2>Phased build order</h2></div>
+    <p class="sec-sub">What to build first with no external slicers, and what waits on the user's Linux slicer binaries. Each phase gates the next.</p>
+
+    <div class="phases">
+      <div class="phase">
+        <div class="pmeta">
+          <div class="pnum">PHASE 0</div>
+          <div class="pdep solo">no slicers needed</div>
+        </div>
+        <div>
+          <h3>Harness skeleton + self-validation (§D)</h3>
+          <p>Wire the reference "slicer" (kerf's <code>lower → G-code</code>) as the first adapter. Implement the transform helpers (translate, rot90, rotate_z, the reflection helper), the region masker, and the verdict pipeline against it.</p>
+          <ul>
+            <li>All SOUND-EXACT relations pass bit-exactly on the reference; graded relations hit their <code>mean_um ≤ r</code> floor.</li>
+            <li>Mutation-test the harness: perturb a reference program, confirm the expected relation fires with the expected severity.</li>
+            <li>Exit gate: green CI with zero external dependencies.</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="phase">
+        <div class="pmeta">
+          <div class="pnum">PHASE 1</div>
+          <div class="pdep solo">no slicers needed</div>
+        </div>
+        <div>
+          <h3>Mesh generator + shrinker (§E)</h3>
+          <p>CSG generator on manifold3d, validity gate on trimesh, boundary-targeted sweeps, and the delta-debug face shrinker. Validate the shrinker by feeding known-divergent reference programs and confirming it minimizes to the expected witness.</p>
+          <ul>
+            <li>Corpus of valid-by-construction meshes + a labeled malformed set.</li>
+            <li>Shrinker produces &lt; 20-triangle witnesses on seeded failures.</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="phase">
+        <div class="pmeta">
+          <div class="pnum">PHASE 2</div>
+          <div class="pdep needs">needs 1 Linux slicer</div>
+        </div>
+        <div>
+          <h3>First real adapter + metamorphic loop (§B, §C)</h3>
+          <p>Bring up <strong>PrusaSlicer on Linux</strong> (cleanest CLI, best-verified flags). Run M0 first on every config; only if determinism holds, run M1 / M2a / M2b / M4 self-comparison. This is where the first real bugs appear.</p>
+          <ul>
+            <li>Establish the fixed control profile; confirm M0 passes under it.</li>
+            <li>Two-resolution confirmation + <code>Diagnostics</code> admissibility gate live in the loop.</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="phase">
+        <div class="pmeta">
+          <div class="pnum">PHASE 3</div>
+          <div class="pdep needs">needs 2–3 Linux slicers</div>
+        </div>
+        <div>
+          <h3>Differential loop + remaining adapters (§C, §A)</h3>
+          <p>Add <strong>CuraEngine</strong> and <strong>OrcaSlicer</strong> (Linux/WSL — Orca's <code>result.json</code> is Linux-only). Enable the differential shell-containment check (D0) and the volume band (D2). Every adapter reuses the Phase-2 pipeline unchanged.</p>
+          <ul>
+            <li>Match perimeter count and infill density across slicers before D0/D2.</li>
+            <li>Differential is graded and region-masked only — never full-program equality.</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="phase">
+        <div class="pmeta">
+          <div class="pnum">PHASE 4</div>
+          <div class="pdep needs">needs slicers + repair tools</div>
+        </div>
+        <div>
+          <h3>Campaign, triage, report</h3>
+          <p>Continuous fuzzing with boundary sweeps; auto-triage by which denotation moved; the repair-tool differential track (MeshLab / Meshmixer as systems-under-test). Package minimized witnesses with per-invariant provenance for upstream bug reports.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================ G ============================================ -->
+  <section id="framing">
+    <div class="sec-head"><span class="tag">G</span><h2>Contribution &amp; threats to validity</h2></div>
+    <p class="sec-sub">Honest framing. The strongest prior art is close — that is a reason to sharpen the claim, not abandon it.</p>
+
+    <div class="col">
+      <h3>The contribution, stated precisely</h3>
+      <p>Slicers are compilers from solid geometry to machine code, yet unlike C compilers they have had neither a Csmith (a generator of well-defined inputs) nor an EMI-style semantic oracle. <strong>GlitchFinder (OOPSLA&nbsp;2025)</strong> took the first step — denoting G-code to occupancy for differential slicer comparison over a fixed 58-model corpus — but it is differential-only, corpus-bound, uses an approximate point cloud, and has no proven equivalences.</p>
+      <p>kerf supplies the two missing halves: a semantic denotation with <strong>machine-checked metamorphic invariants</strong> (translation- and rotation-equivariance, with a graded nearest-cell distance and IoU that absorb sub-cell rounding), and a <strong>procedural mesh generator</strong> that turns those invariants into an unbounded metamorphic + differential fuzzing loop. This is the first setup where both the Csmith (generator) and the EMI (proven equivalence oracle) exist for the mesh&rarr;G-code compiler.</p>
+
+      <div class="note plain">
+        <span class="lbl">Delta vs. GlitchFinder</span>
+        Three things GlitchFinder lacks and kerf has: <strong>(1)</strong> proven metamorphic equivariances of the denotation itself, not just invariant-checking as a use case; <strong>(2)</strong> a generator, so this is a fuzzer rather than a study over a fixed corpus — the analogue of testing GCC only on SPEC and never Csmith; <strong>(3)</strong> graded, tolerance-aware metrics rather than an approximate cuboid point cloud. That GlitchFinder independently arrived at the denotation-as-oracle idea is the strongest possible validation that the approach is real and publishable.
+      </div>
+
+      <h3>Threats to validity — where a "bug" might not be one</h3>
+      <ul>
+        <li><strong>Resolution-bounded oracle.</strong> Every verdict is modulo r; a defect smaller than r is invisible and a "SAME" is only "same up to r." This is definitional, not a flaw — but it bounds every claim.</li>
+        <li><strong>Geometry, not process.</strong> No temperature, cooling, pressure-advance, retraction, or timing. Thermal and retraction bugs are out of scope; <code>print_time</code> is a model, not the oracle.</li>
+        <li><strong>Re-inferred metadata.</strong> Role and width are untrusted parser inferences; the <code>Diagnostics</code> gate must exclude any verdict living only in guessed metadata, or false positives leak in.</li>
+        <li><strong>kerf's own soundness is layered, not a single mechanized geometry proof.</strong> P1–P4 are Lean-proved unbounded, the rasterizer's symmetry is Kani-proved, and the rest is property-tested. Strong enough that M1/M2a rest on proved behavior — but the emitter used in §D is guarded, not part of the verified definition.</li>
+        <li><strong>Determinism assumption.</strong> Every metamorphic verdict presumes M0 passed under the control profile. If a slicer is irreducibly nondeterministic under those flags, that config yields no interpretable verdict (and the nondeterminism is itself a finding).</li>
+        <li><strong>Differential is inherently weaker.</strong> Its only clean signal is outer-shell graded containment and a volume band; full cross-slicer occupancy equality is unsound because of legitimate infill / seam / support / arc freedom.</li>
+        <li><strong>Version drift.</strong> All CLI flags are pinned to specific builds (Prusa 2.9.6, Cura 5.13, Orca main); config keys must be re-confirmed per build. Pin exact tags in the harness.</li>
+      </ul>
+
+      <div class="note good">
+        <span class="lbl">Why the core claim survives every threat above</span>
+        The threats degrade the <em>differential</em> loop and bound the <em>resolution</em>, but the sound core — metamorphic self-comparison under a proved symmetry, gated on determinism, graded where rounding bites, minimized before reporting — produces violations that are, by construction, attributable to the slicer and reproducible. That is a genuinely new capability for this pipeline.
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <div class="src">
+      <h5>Grounding</h5>
+      kerf primitives cited from crates/kerf-core/src (denote.rs, metamorphic.rs, diff.rs, voxel.rs, transform.rs, flow.rs, verify.rs, frontend/gcode.rs) and docs/08-semantics.md. Slicer CLI verified against PrusaSlicer master PrintConfig.cpp / SeamPlacer.cpp + Ubuntu/Debian man pages; Ultimaker/CuraEngine CommandLine.cpp + fdmprinter.def.json; SoftFever/OrcaSlicer PrintConfig.cpp + OrcaSlicer.cpp. Prior art: GlitchFinder (arXiv:2509.00699, OOPSLA 2025), Csmith (PLDI 2011), EMI/Orion (PLDI 2014), Reincarnate/λCAD (ICFP 2018).
+    </div>
+    <div class="src">
+      <h5>Reading order</h5>
+      A architecture · B invariants · C adapters · D self-validation · E targets · F build order · G framing. Build D before C: prove the harness on kerf's own emitter before trusting a verdict against any real slicer.
+    </div>
+  </div>
+</footer>
+
+<script>
+(function () {
+  var c = document.getElementById('lattice');
+  if (!c) return;
+  var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var ctx = c.getContext('2d');
+  var W, H, dpr;
+  function size() {
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    W = c.clientWidth; H = c.clientHeight;
+    c.width = W * dpr; c.height = H * dpr;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  size();
+  window.addEventListener('resize', size);
+
+  // A raster-lattice motif: sparse grid cells "lighting up" like occupancy sampling.
+  var CELL = 26;
+  function draw(t) {
+    ctx.clearRect(0, 0, W, H);
+    var cols = Math.ceil(W / CELL), rows = Math.ceil(H / CELL);
+    ctx.lineWidth = 1;
+    for (var i = 0; i <= cols; i++) {
+      ctx.strokeStyle = 'rgba(111,168,255,0.05)';
+      ctx.beginPath(); ctx.moveTo(i * CELL, 0); ctx.lineTo(i * CELL, H); ctx.stroke();
+    }
+    for (var j = 0; j <= rows; j++) {
+      ctx.beginPath(); ctx.moveTo(0, j * CELL); ctx.lineTo(W, j * CELL); ctx.stroke();
+    }
+    // deposited-cell pulses along a diagonal sweep
+    for (var x = 0; x < cols; x++) {
+      for (var y = 0; y < rows; y++) {
+        var phase = (x * 0.6 + y * 0.9);
+        var v = Math.sin(phase - t * 0.0011);
+        if (v > 0.86) {
+          var a = (v - 0.86) / 0.14;
+          ctx.fillStyle = 'rgba(31,111,235,' + (a * 0.5).toFixed(3) + ')';
+          ctx.fillRect(x * CELL + 1, y * CELL + 1, CELL - 2, CELL - 2);
+        }
+      }
+    }
+  }
+  if (reduce) { draw(0); return; }
+  var raf;
+  function loop(t) { draw(t); raf = requestAnimationFrame(loop); }
+  raf = requestAnimationFrame(loop);
+})();
+</script>
