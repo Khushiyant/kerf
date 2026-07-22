@@ -115,17 +115,23 @@ python campaign.py --prusa-exe "$BIN" --prusa-profile profile.ini \
 ```
 
 1,680 units (140 shapes × 12 configs × PrusaSlicer 2.9.6 + Cura 5.13). 269 raw signals; adjudication
-(re-testing each lead in isolation) leaves **two real, Cura-specific findings**, one inherent effect,
-and the rest methodology — see `reports/trust_boundary.html` (and the published Artifact):
+(re-testing each lead in isolation) left **8 surviving** — one filable defect, one quantified boundary,
+one inherent effect, and the rest leads/harness — see `reports/trust_boundary.html` (published Artifact):
 
-- **Cura is not rotationally equivariant for sub-nozzle walls.** Below ~1.5× the nozzle a straight wall
-  is deposited ~700µm differently depending on orientation; resolution-independent (holds to a 25µm
-  grid). PrusaSlicer: 0µm at every width. (`reports/divergence.json` has the curve.)
-- **CuraEngine is nondeterministic on curved/CSG meshes.** A sphere gives 6 distinct deposited-material
-  results in 6 single-threaded (`-m1`) slices of identical input; PrusaSlicer is deterministic. (The raw
-  count is inflated by parallel-load false positives — real at its core.)
-- Marginal/inherent: acute-tip containment over-reach (≤51µm). Leads (not verdicts): cross-slicer
-  disagreement on multi-body STLs (the bbox differential is unsound for disjoint solids).
+- **CuraEngine is nondeterministic on the sphere path** *(filable defect)*. A frozen STL (md5 re-checked
+  identical before every run), sliced 6× single-threaded (`-m1`), gives **4 distinct deposited-material
+  results**; PrusaSlicer gives 1. Sphere-specific (cylinder and box are deterministic), ~200µm spread
+  (≈1 cell), likely ASLR + pointer-keyed iteration since each slice is a fresh process. Minimal repro:
+  `reports/cura_nondeterminism_sphere.stl`.
+- **Thin-wall rotational non-equivariance, quantified** *(known, not a defect)*. Below ~1.5× nozzle Cura
+  deposits a wall ~700µm differently by orientation (resolution-independent to a 25µm grid); PrusaSlicer:
+  0µm. But **both engines run Arachne** (PrusaSlicer ported it in 2.5) and this orientation-sensitivity at
+  the 2→1 transition is known — so it is not a Cura-specific defect. Equalizing the obvious Arachne params
+  (`min_bead_width`, `min_feature_size`, `wall_transition_length`) did *not* reconcile them, so the exact
+  cause is open. The contribution is the measurement, not the phenomenon. (`reports/divergence.json`.)
+- Marginal/inherent: acute-tip containment over-reach (≤51µm). Leads: cross-slicer disagreement on
+  multi-body STLs (the bbox differential is unsound for disjoint solids). Harness: determinism inflation
+  under parallel load (pin `-m1`) and transient no-G-code under load (retry once) — both fixed.
 
 Scaling from 85 to 1,680 units exposed harness limits, all fixed or documented: multithreaded slicers
 need thread-pinning for the determinism gate; transient no-G-code under load needs a retry before it's
