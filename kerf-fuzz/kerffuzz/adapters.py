@@ -134,12 +134,14 @@ class _PrusaSlicer(SlicerAdapter):
             ini = self._write_profile(d)
             args = [self.exe, "--export-gcode", "--load", str(ini), "--output", str(out),
                     "--dont-arrange", "--center", self._bed_center(), str(stl)]
-            r = subprocess.run(args, check=True, capture_output=True, timeout=180, text=True)
-            gpath = out if out.exists() else next(iter(d.glob("*.gcode")), None)
-            if gpath is None:  # exit 0 but no G-code (e.g. part off/over the bed): a reportable outcome
-                tail = "\n".join((r.stderr or r.stdout or "").splitlines()[-3:])
-                raise RuntimeError(f"{self.exe} produced no G-code for {instance.label}: {tail}")
-            return gpath.read_text()
+            r = None
+            for _ in range(2):  # retry once: no-G-code under heavy parallel load can be transient
+                r = subprocess.run(args, capture_output=True, timeout=180, text=True)
+                gpath = out if out.exists() else next(iter(d.glob("*.gcode")), None)
+                if gpath is not None:
+                    return gpath.read_text()
+            tail = "\n".join((r.stderr or r.stdout or "").splitlines()[-3:])
+            raise RuntimeError(f"{self.exe} produced no G-code for {instance.label}: {tail}")
 
 
 def prusaslicer(profile_ini: str, exe: str = "prusa-slicer", fill_density: str | None = "0",
@@ -175,10 +177,11 @@ class _CuraEngine(SlicerAdapter):
     name = "curaengine"
 
     def __init__(self, definition_json: str, settings: dict | None = None, exe: str = "CuraEngine",
-                 overrides: dict | None = None):
+                 overrides: dict | None = None, threads: int = 1):
         self.definition_json = definition_json
         self.exe = exe
-        self.settings = dict(_CURA_BASE)
+        self.threads = threads  # -m1: CuraEngine is multithreaded and its output is NONDETERMINISTIC
+        self.settings = dict(_CURA_BASE)   # across threads; pin to 1 so the determinism GATE is meaningful.
         self.settings.update(settings or {})
         self.settings.update(overrides or {})  # native Cura keys (e.g. from config-space mutation)
 
@@ -191,7 +194,7 @@ class _CuraEngine(SlicerAdapter):
             last = ""
             for _ in range(16):  # bounded self-heal for unresolved-default settings
                 s = {**self.settings, **extra}
-                args = [self.exe, "slice", "-v", "-j", self.definition_json]
+                args = [self.exe, "slice", "-v", f"-m{self.threads}", "-j", self.definition_json]
                 for k, v in s.items():
                     args += ["-s", f"{k}={v}"]
                 args += ["-l", str(stl), "-o", str(out)]
@@ -209,8 +212,8 @@ class _CuraEngine(SlicerAdapter):
 
 
 def curaengine(definition_json: str, settings: dict | None = None, exe: str = "CuraEngine",
-               overrides: dict | None = None) -> _CuraEngine:
-    return _CuraEngine(definition_json, settings, exe, overrides)
+               overrides: dict | None = None, threads: int = 1) -> _CuraEngine:
+    return _CuraEngine(definition_json, settings, exe, overrides, threads)
 
 
 def orca(machine_json: str, process_json: str, filament_json: str, exe: str = "orca-slicer") -> _CliSlicer:
