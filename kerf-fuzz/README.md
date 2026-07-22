@@ -88,7 +88,28 @@ now translation-normalized by bbox centre (slicers auto-place the part on the be
 relation uses the same sub-cell tolerance as the other isometries (a re-rasterizing slicer has <1-cell
 noise that the exact-reference 1µm tolerance wrongly flagged).
 
+### Campaign (`hunt.py`): 85 adversarial shapes, parallel
+
+```bash
+python hunt.py --exe "$BIN" --profile profile.ini --random 40 --workers 8 --out runs/hunt
+```
+
+Sweeps acute-tip / thin-wall / deep-concavity / near-circle / tiny-island / hole-ligament families
+(swept across the parameter that matters) plus random shapes, parallelized across processes, deduping
+each family to one representative lead. The first campaign flagged 16 raw violations; **adjudication
+traced all the gross ones to a bug in the fuzzer itself** — `random_convex` produced non-convex
+polygons and the prism STL triangulated caps with a fan (valid only for convex rings), so concave STLs
+spilled outside the true footprint and the (correct) containment gate flagged the slicer for faithfully
+filling an invalid mesh. Fixed at the root (`random_convex` now returns a convex hull; caps use a real
+triangulator for concave rings). Post-fix, over 85 shapes: **0 determinism / rotation / mirror /
+translate violations; containment clean on every convex and concave shape** except sub-nozzle sharp
+tips (acute wedges, razor stars) where material over-reaches by ≤63µm (<⅓ cell) — monotonic in tip
+sharpness, i.e. inherent FDM bead geometry, not a slicer defect. Sub-nozzle islands (0.2–0.3mm) produce
+no G-code (the slicer drops features below the 0.4mm nozzle; surfaced by the adapter's no-G-code guard).
+
 ## Threats to validity (design doc §G)
-World-anchored infill (controlled via profiles), the prism STL caps are convex-only (use the meshgen
-CSG path for concave 3D), and a finding is only as sound as its class. GATE/GRADED are trustworthy;
-anything else is a lead, not a verdict.
+World-anchored infill (controlled via profiles), and a finding is only as sound as its class. Prism STL
+caps are now triangulated correctly for concave rings (via `manifold3d`), but hole interiors are still
+not emitted in the prism STL — the containment gate is outer-only so this is not a false-positive
+source, but hole geometry on real slicers must be exercised through the meshgen CSG path. GATE/GRADED
+are trustworthy; anything else is a lead, not a verdict.

@@ -32,10 +32,36 @@ def star(points: int, r_out: int, r_in: int, cx: int = 0, cy: int = 0) -> np.nda
     return np.stack([cx + r * np.cos(a), cy + r * np.sin(a)], axis=1).round().astype(np.int64)
 
 
+def _convex_hull(pts: np.ndarray) -> np.ndarray:
+    """Andrew's monotone chain — CCW open ring (int64). Used to make `random_convex` actually convex."""
+    p = sorted(set(map(tuple, pts.tolist())))
+    if len(p) < 3:
+        return np.array(p, dtype=np.int64)
+
+    def cross(o, a, b):
+        return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+
+    lower = []
+    for q in p:
+        while len(lower) >= 2 and cross(lower[-2], lower[-1], q) <= 0:
+            lower.pop()
+        lower.append(q)
+    upper = []
+    for q in reversed(p):
+        while len(upper) >= 2 and cross(upper[-2], upper[-1], q) <= 0:
+            upper.pop()
+        upper.append(q)
+    return np.array(lower[:-1] + upper[:-1], dtype=np.int64)
+
+
 def random_convex(rng: np.random.Generator, sides: int, r_um: int) -> np.ndarray:
+    """A genuinely convex polygon: the convex hull of `sides` angularly-spread jittered-radius points
+    (the raw points are star-shaped, i.e. usually non-convex — hulling honours the name and keeps the
+    prism STL's cap valid)."""
     a = np.sort(rng.uniform(0, 2 * np.pi, sides))
     r = rng.uniform(0.4, 1.0, sides) * r_um
-    return np.stack([r * np.cos(a), r * np.sin(a)], axis=1).round().astype(np.int64)
+    pts = np.stack([r * np.cos(a), r * np.sin(a)], axis=1).round().astype(np.int64)
+    return _convex_hull(pts)
 
 
 def _closed(ring: np.ndarray) -> dict:
@@ -44,9 +70,26 @@ def _closed(ring: np.ndarray) -> dict:
     return {"points": pts}
 
 
-def _fan(ring, z: float, up: bool) -> list:
-    v = [(float(x) / 1000.0, float(y) / 1000.0, z) for x, y in ring]
-    return [(v[0], v[i], v[i + 1]) if up else (v[0], v[i + 1], v[i]) for i in range(1, len(v) - 1)]
+def _is_convex(ring: np.ndarray) -> bool:
+    n = len(ring)
+    signs = []
+    for i in range(n):
+        a, b, c = ring[i], ring[(i + 1) % n], ring[(i + 2) % n]
+        cr = (b[0] - a[0]) * (c[1] - b[1]) - (b[1] - a[1]) * (c[0] - b[0])
+        if cr != 0:
+            signs.append(cr > 0)
+    return all(signs) or not any(signs)
+
+
+def _cap_tris(ring: np.ndarray) -> list:
+    """Triangulate a simple polygon into index triples. A fan works for convex rings (no dependency);
+    a concave ring MUST use a real triangulator or the fan bridges across notches and the STL solid
+    spills outside the true footprint (a silent false-positive generator for the containment gate)."""
+    if _is_convex(ring):
+        return [(0, i, i + 1) for i in range(1, len(ring) - 1)]
+    import manifold3d as m3
+
+    return [tuple(int(x) for x in t) for t in np.asarray(m3.triangulate([ring.astype(np.float64)]))]
 
 
 # ---- the prism instance -------------------------------------------------------------------------
@@ -106,7 +149,11 @@ class Prism(Instance):
         h_mm = self.n_layers * self.layer_h_um / 1000.0
         ring = self.outer
         v = [(float(x) / 1000.0, float(y) / 1000.0) for x, y in ring]
-        tris = _fan(ring, 0.0, up=False) + _fan(ring, h_mm, up=True)
+        cap = _cap_tris(ring)  # correct for convex AND concave outer polygons
+        tris = []
+        for i, j, k in cap:  # bottom cap (normal down: reversed), top cap (normal up)
+            tris.append(((v[i][0], v[i][1], 0.0), (v[k][0], v[k][1], 0.0), (v[j][0], v[j][1], 0.0)))
+            tris.append(((v[i][0], v[i][1], h_mm), (v[j][0], v[j][1], h_mm), (v[k][0], v[k][1], h_mm)))
         for i in range(len(v)):
             a, b = v[i], v[(i + 1) % len(v)]
             tris.append(((a[0], a[1], 0.0), (b[0], b[1], 0.0), (b[0], b[1], h_mm)))
