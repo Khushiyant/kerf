@@ -1,0 +1,103 @@
+{
+  "containment_vs_sharpness": [
+    {
+      "height_um": 400,
+      "tip_angle_deg": 0.57,
+      "over_um": 0.0
+    },
+    {
+      "height_um": 600,
+      "tip_angle_deg": 0.86,
+      "over_um": 15.953039174491607
+    },
+    {
+      "height_um": 800,
+      "tip_angle_deg": 1.15,
+      "over_um": 0.0
+    },
+    {
+      "height_um": 1200,
+      "tip_angle_deg": 1.72,
+      "over_um": 0.0
+    },
+    {
+      "height_um": 1800,
+      "tip_angle_deg": 2.58,
+      "over_um": 21.571856383504496
+    },
+    {
+      "height_um": 2600,
+      "tip_angle_deg": 3.72,
+      "over_um": 13.125027843889313
+    },
+    {
+      "height_um": 4000,
+      "tip_angle_deg": 5.71,
+      "over_um": 0.0
+    },
+    {
+      "height_um": 6000,
+      "tip_angle_deg": 8.53,
+      "over_um": 13.853268204687822
+    }
+  ],
+  "equivariance_vs_width": [
+    {
+      "width_um": 200,
+      "prusa": 0.0,
+      "cura": 700.0
+    },
+    {
+      "width_um": 250,
+      "prusa": 0.0,
+      "cura": 700.0
+    },
+    {
+      "width_um": 300,
+      "prusa": 0.0,
+      "cura": 691.2
+    },
+    {
+      "width_um": 350,
+      "prusa": 0.0,
+      "cura": 656.3
+    },
+    {
+      "width_um": 400,
+      "prusa": 0.0,
+      "cura": 656.3
+    },
+    {
+      "width_um": 450,
+      "prusa": 0.0,
+      "cura": 710.0
+    },
+    {
+      "width_um": 500,
+      "prusa": 0.0,
+      "cura": 717.8
+    },
+    {
+      "width_um": 600,
+      "prusa": 0.0,
+      "cura": 0.0
+    },
+    {
+      "width_um": 800,
+      "prusa": 200.0,
+      "cura": 0.0
+    },
+    {
+      "width_um": 1000,
+      "prusa": 0.0,
+      "cura": 0.0
+    },
+    {
+      "width_um": 1400,
+      "prusa": 0.0,
+      "cura": 0.0
+    }
+  ],
+  "nozzle_um": 400,
+  "res_um": 200
+}

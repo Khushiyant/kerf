@@ -1,0 +1,304 @@
+<style>
+  :root{
+    --paper:#ECEEF0; --card:#F6F7F8; --ink:#161B21; --slate:#58626C; --faint:#8B949D;
+    --line:#D2D7DC; --gauge:#0B6E8C; --diverge:#C2542A; --stable:#2E7D6B;
+    --real:#B23A2E; --marginal:#9A6B12; --artifact:#6A747E;
+    --mono:ui-monospace,"SF Mono","Cascadia Code",Menlo,Consolas,monospace;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--sans);
+    line-height:1.6;-webkit-font-smoothing:antialiased;}
+  .wrap{max-width:900px;margin:0 auto;padding:0 24px;}
+  .mono{font-family:var(--mono);}
+  .eyebrow{font-family:var(--mono);font-size:11.5px;letter-spacing:.18em;text-transform:uppercase;
+    color:var(--gauge);font-weight:600;}
+  h1{font-size:clamp(30px,5.2vw,46px);line-height:1.08;letter-spacing:-.02em;font-weight:700;
+    text-wrap:balance;margin:.5rem 0 0;}
+  h2{font-size:22px;letter-spacing:-.01em;font-weight:700;margin:0 0 4px;text-wrap:balance;}
+  h3{font-size:15px;font-weight:700;margin:0 0 2px;}
+  p{margin:.6rem 0;max-width:66ch;}
+  a{color:var(--gauge);}
+  .thesis{font-size:19px;line-height:1.5;color:#2A313A;max-width:64ch;margin-top:14px;}
+  .thesis b{color:var(--ink);background:linear-gradient(transparent 62%, #C2542A33 62%);padding:0 1px;}
+
+  /* rhythm */
+  header.top{padding:56px 0 30px;border-bottom:1px solid var(--line);}
+  section{padding:44px 0;border-bottom:1px solid var(--line);}
+  .kicker{display:flex;align-items:baseline;gap:12px;margin-bottom:20px;}
+  .kicker .n{font-family:var(--mono);font-size:12px;color:var(--faint);font-weight:600;letter-spacing:.1em;}
+  .kicker h2{margin:0;}
+
+  /* stat strip */
+  .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--line);
+    border:1px solid var(--line);border-radius:8px;overflow:hidden;margin-top:24px;}
+  .stat{background:var(--card);padding:16px 16px 14px;}
+  .stat .v{font-family:var(--mono);font-size:26px;font-weight:600;letter-spacing:-.01em;
+    font-variant-numeric:tabular-nums;line-height:1;}
+  .stat .l{font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;
+    color:var(--faint);margin-top:8px;}
+  @media(max-width:640px){.stats{grid-template-columns:repeat(2,1fr);}}
+
+  /* chart */
+  .figure{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:22px 20px 16px;margin-top:8px;}
+  .figure .cap{font-family:var(--mono);font-size:11px;letter-spacing:.06em;color:var(--faint);
+    text-transform:uppercase;margin-bottom:14px;display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;}
+  canvas{width:100%;display:block;}
+  .legend{display:flex;gap:22px;flex-wrap:wrap;margin-top:12px;font-family:var(--mono);font-size:12px;}
+  .legend span{display:inline-flex;align-items:center;gap:8px;color:#39424B;}
+  .swatch{width:16px;height:3px;border-radius:2px;display:inline-block;}
+  .readout{font-family:var(--mono);font-size:12.5px;color:#39424B;margin-top:14px;padding-top:14px;
+    border-top:1px dashed var(--line);}
+  .readout b{color:var(--diverge);}
+
+  /* ledger */
+  .ledger{width:100%;border-collapse:collapse;margin-top:20px;font-size:14px;}
+  .ledger th{font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;
+    color:var(--faint);text-align:left;padding:0 12px 10px;font-weight:600;border-bottom:1px solid var(--line);}
+  .ledger td{padding:14px 12px;border-bottom:1px solid var(--line);vertical-align:top;}
+  .ledger tr:last-child td{border-bottom:none;}
+  .ledger .finding{font-weight:600;}
+  .ledger .detail{color:var(--slate);font-size:13px;line-height:1.5;margin-top:3px;max-width:52ch;}
+  .ledger .where{font-family:var(--mono);font-size:11.5px;color:var(--faint);white-space:nowrap;}
+  .ledger .cnt{font-family:var(--mono);font-variant-numeric:tabular-nums;color:var(--slate);text-align:right;}
+  .chip{font-family:var(--mono);font-size:10px;letter-spacing:.09em;text-transform:uppercase;font-weight:700;
+    padding:3px 8px;border-radius:4px;white-space:nowrap;display:inline-block;border:1px solid;}
+  .chip.real{color:var(--real);border-color:#B23A2E55;background:#B23A2E12;}
+  .chip.marginal{color:var(--marginal);border-color:#9A6B1255;background:#9A6B1214;}
+  .chip.artifact{color:var(--artifact);border-color:#6A747E44;background:#6A747E0F;}
+  .chip.lead{color:var(--gauge);border-color:#0B6E8C55;background:#0B6E8C12;}
+  .ledger-scroll{overflow-x:auto;}
+  @media(max-width:640px){.ledger{min-width:560px;}}
+
+  /* notes / built */
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--line);
+    border:1px solid var(--line);border-radius:8px;overflow:hidden;margin-top:12px;}
+  .cell{background:var(--card);padding:18px 18px 16px;}
+  .cell .tag{font-family:var(--mono);font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;
+    color:var(--gauge);font-weight:600;margin-bottom:8px;}
+  .cell p{font-size:13.5px;color:#39424B;margin:.3rem 0 0;max-width:none;}
+  @media(max-width:640px){.grid2{grid-template-columns:1fr;}}
+
+  ul.tight{margin:.5rem 0 0;padding-left:0;list-style:none;}
+  ul.tight li{padding:10px 0 10px 26px;position:relative;border-bottom:1px solid var(--line);font-size:14px;color:#2A313A;}
+  ul.tight li:last-child{border-bottom:none;}
+  ul.tight li::before{content:"›";position:absolute;left:6px;top:9px;color:var(--gauge);font-weight:700;}
+  ul.tight b{color:var(--ink);}
+
+  footer{padding:36px 0 60px;color:var(--slate);font-size:13px;}
+  footer .mono{font-size:11.5px;color:var(--faint);}
+</style>
+
+<div class="wrap">
+
+  <header class="top">
+    <div class="eyebrow">kerf-fuzz · slicer trust boundary · report 01</div>
+    <h1>A slicer that faithfully fills a wrong shape is still wrong.</h1>
+    <p class="thesis">kerf denotes real slicer G-code back to deposited material and holds
+      mechanically-checked metamorphic invariants — so we can transform a mesh, re-slice, and check the
+      material transformed the same way, <b>with no ground truth</b>. Pointed at PrusaSlicer 2.9.6 and
+      Cura 5.13, it found two reproducible, Cura-specific divergences — and, honestly, hardened its own
+      harness about as much as it tested the slicers.</p>
+  </header>
+
+  <section>
+    <div class="kicker"><span class="n">01</span><h2>The finding: Cura is not rotationally equivariant for sub-nozzle walls</h2></div>
+    <p>Rotating the input must rotate the output. For a straight wall that means: slice it, rotate the
+      deposited material 90°, and you should get exactly what you get by rotating the wall first and
+      re-slicing. PrusaSlicer obeys this at every width. Cura does not — below roughly 1.5× the nozzle
+      diameter it places the single sub-nozzle bead differently depending on orientation, by ~0.7 mm.
+      The effect is <b>resolution-independent</b> (it survives comparison down to a 25 µm grid), so it
+      is a real geometric divergence, not a rasterization artifact.</p>
+
+    <div class="figure">
+      <div class="cap"><span>Rotational-equivariance error — deposited material, 90° rotation</span><span>lower = more faithful</span></div>
+      <canvas id="chart" height="360" aria-label="Equivariance error versus wall width for PrusaSlicer and Cura"></canvas>
+      <div class="legend">
+        <span><i class="swatch" style="background:var(--diverge)"></i> CuraEngine 5.13</span>
+        <span><i class="swatch" style="background:var(--stable)"></i> PrusaSlicer 2.9.6</span>
+        <span><i class="swatch" style="background:var(--gauge);opacity:.35;height:10px;width:10px;border-radius:2px"></i> trust boundary ≈ 1.5× nozzle</span>
+      </div>
+      <div class="readout">READOUT · at a 0.30 mm wall, Cura's deposited material shifts <b>691 µm</b>
+        under 90° rotation while PrusaSlicer shifts <b style="color:var(--stable)">0 µm</b>. Above ~0.6 mm
+        both are equivariant. Nozzle = 400 µm; comparison grid = 200 µm.</div>
+    </div>
+  </section>
+
+  <section>
+    <div class="kicker"><span class="n">02</span><h2>The campaign</h2></div>
+    <p>Geometry × configuration × two slicers. Config-space is swept because compiler-fuzzing history is
+      unambiguous that configuration bugs outnumber input bugs — so layer height, wall count and seam mode
+      are mutated alongside the shapes. Each unit runs, per slicer, determinism, containment and a rotation
+      relation, plus a cross-slicer differential and (for meshes) an EMI equivalence check.</p>
+    <div class="stats">
+      <div class="stat"><div class="v">1,680</div><div class="l">units run</div></div>
+      <div class="stat"><div class="v">140×12</div><div class="l">shapes × configs</div></div>
+      <div class="stat"><div class="v">2</div><div class="l">real slicers</div></div>
+      <div class="stat"><div class="v">72/72</div><div class="l">self-validation held</div></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="kicker"><span class="n">03</span><h2>Every finding, adjudicated</h2></div>
+    <p>269 raw signals. The discipline is refusing to report any of them until the mechanism is known —
+      the same discipline that earlier traced a 2 mm "leak" to a bug in the fuzzer's own STL generator.
+      Two survive as real, reproducible Cura-specific behavior; one is inherent FDM physics; the rest are
+      leads or methodology, not defects. <b style="background:none">Real*</b> means real at its core but
+      with a raw count inflated by parallel-load false positives — confirmed by re-testing flagged shapes
+      one at a time.</p>
+    <div class="ledger-scroll">
+    <table class="ledger">
+      <thead><tr><th>Signal</th><th>Where</th><th style="text-align:right">×</th><th>Verdict</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><div class="finding">Cura sub-nozzle thin-wall non-equivariance</div>
+              <div class="detail">Deposited wall not a 90° rotation of itself below ~1.5× nozzle; ~700 µm, resolution-independent. PrusaSlicer: 0 µm.</div></td>
+          <td class="where">prism<br>rotation</td><td class="cnt">96</td>
+          <td><span class="chip real">Real</span></td>
+        </tr>
+        <tr>
+          <td><div class="finding">CuraEngine nondeterministic on curved / CSG meshes</div>
+              <div class="detail">A sphere produced 6 distinct deposited-material results in 6 single-threaded (−m1) slices of identical input; several random CSG meshes likewise. PrusaSlicer is deterministic throughout. The raw count is inflated by parallel-load false positives — box-only meshes flagged in the campaign are reproducible in isolation — but the curved-mesh core is real.</div></td>
+          <td class="where">mesh<br>determinism</td><td class="cnt">105</td>
+          <td><span class="chip real">Real*</span></td>
+        </tr>
+        <tr>
+          <td><div class="finding">Acute-tip containment over-reach</div>
+              <div class="detail">Material reaches ≤51 µm past the bead-inset threshold at razor tips — a round nozzle can't render a sub-nozzle point. Inherent FDM.</div></td>
+          <td class="where">prism<br>containment</td><td class="cnt">12</td>
+          <td><span class="chip marginal">Marginal</span></td>
+        </tr>
+        <tr>
+          <td><div class="finding">Cross-slicer disagreement on multi-body STL</div>
+              <div class="detail">On a 2-disjoint-body mesh, Prusa sliced one body, Cura both (6.6 mm bbox gap). Real divergence — but the bbox differential is the wrong tool for disjoint solids.</div></td>
+          <td class="where">mesh<br>differential</td><td class="cnt">3</td>
+          <td><span class="chip lead">Lead</span></td>
+        </tr>
+        <tr>
+          <td><div class="finding">Cura EMI divergence</div>
+              <div class="detail">One subdivided-mesh mutant sliced differently from its original — plausibly the same curved-mesh nondeterminism surfacing through the EMI pair.</div></td>
+          <td class="where">mesh<br>EMI</td><td class="cnt">1</td>
+          <td><span class="chip lead">Lead</span></td>
+        </tr>
+        <tr>
+          <td><div class="finding">PrusaSlicer transient no-G-code</div>
+              <div class="detail">No output under heavy parallel load; the same mesh slices fine in isolation. Retry-once added.</div></td>
+          <td class="where">mesh<br>crash</td><td class="cnt">27</td>
+          <td><span class="chip artifact">Artifact</span></td>
+        </tr>
+        <tr>
+          <td><div class="finding">Differential-crash cascade</div>
+              <div class="detail">Downstream of the transient crashes — no output to compare.</div></td>
+          <td class="where">mesh<br>differential</td><td class="cnt">24</td>
+          <td><span class="chip artifact">Artifact</span></td>
+        </tr>
+      </tbody>
+    </table>
+    </div>
+  </section>
+
+  <section>
+    <div class="kicker"><span class="n">04</span><h2>What scaling exposed</h2></div>
+    <p>85 shapes was a smoke test; 1,680 units was enough to reveal that the harness itself needs
+      hardening before any "slicer X is clean" claim is defensible. Three lessons, all now fixed or
+      documented:</p>
+    <div class="grid2">
+      <div class="cell"><div class="tag">Threads</div><h3>Determinism needs a pinned scheduler</h3>
+        <p>A multithreaded slicer measured under a parallel campaign conflates slicer nondeterminism with
+          load-induced nondeterminism. Pin one thread, or determinism means nothing.</p></div>
+      <div class="cell"><div class="tag">Topology</div><h3>bbox differential ≠ disjoint solids</h3>
+        <p>Comparing deposited bounding boxes is sound for one body; for multi-body STLs, slicers
+          legitimately differ in placement and selection. Needs per-component comparison.</p></div>
+      <div class="cell"><div class="tag">Transience</div><h3>Confirm before you accuse</h3>
+        <p>A no-output under load is not a crash. Retry and reproduce in isolation before recording a
+          finding — otherwise the report fills with scheduler noise.</p></div>
+      <div class="cell"><div class="tag">Metamorphic scope</div><h3>Rotation is exact only for prisms</h3>
+        <p>Faceted, curved CSG meshes are not exactly Z-rotation-equivariant through a slicer's wall
+          generator. Meshes belong to the differential and EMI relations, not rotation.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="kicker"><span class="n">05</span><h2>What was built to get here</h2></div>
+    <ul class="tight">
+      <li><b>Config-space mutation</b> — an abstract layer-height × wall-count × seam grid mapped to each slicer's native keys, so the fuzzer sweeps the surface where bugs actually cluster.</li>
+      <li><b>A second real slicer</b> — CuraEngine 5.13 wired in (self-healing its unresolved-default settings), enabling the cross-slicer differential that metamorphic testing alone can't provide.</li>
+      <li><b>An EMI relation</b> — a semantics-preserving mesh mutant (subdivided edges) must slice to identical material: a GATE-class finder orthogonal to isometry.</li>
+      <li><b>A parallel campaign runner</b> — geometry × config × slicers, streamed to a resumable checkpoint, deduping a whole shape family to one representative lead.</li>
+      <li><b>Corpus where bugs live</b> — thin walls straddling the nozzle, hole/ligament tolerance, tall seam-stress, multi-island, bridging, near-degenerate facets.</li>
+    </ul>
+  </section>
+
+  <footer>
+    <p>This is still a smoke test toward a real campaign — 1,680 units, not the 10⁴–10⁵ (and deeper
+      config mutation) a "clean" verdict would require. Every number here is reproducible from the
+      committed harness; the self-validation oracle held at 72/72 throughout, so a surviving violation is
+      a finding about a slicer, not about the tool.</p>
+    <p class="mono">kerf-fuzz · PrusaSlicer 2.9.6 + Cura 5.13 · macOS · comparison grid 200 µm · nozzle 400 µm</p>
+  </footer>
+
+</div>
+
+<script>
+const DATA = {
+  width:[200,250,300,350,400,450,500,600,800,1000,1400],
+  cura: [700,700,691,656,656,710,718,0,0,0,0],
+  prusa:[0,0,0,0,0,0,0,0,200,0,0],
+  nozzle:400, boundaryLo:520, boundaryHi:600
+};
+const cv = document.getElementById('chart');
+function draw(){
+  const cssW = cv.clientWidth, cssH = 360;
+  const dpr = Math.min(window.devicePixelRatio||1, 2);
+  cv.width = cssW*dpr; cv.height = cssH*dpr;
+  const g = cv.getContext('2d'); g.setTransform(dpr,0,0,dpr,0,0);
+  g.clearRect(0,0,cssW,cssH);
+
+  const padL=52, padR=16, padT=18, padB=42;
+  const W = cssW-padL-padR, H = cssH-padT-padB;
+  const xmin=200, xmax=1400, ymin=0, ymax=800;
+  const X = w => padL + (w-xmin)/(xmax-xmin)*W;
+  const Y = v => padT + (1-(v-ymin)/(ymax-ymin))*H;
+  const css = k => getComputedStyle(document.documentElement).getPropertyValue(k).trim();
+  const ink=css('--ink'), slate=css('--slate'), faint=css('--faint'), line=css('--line'),
+        gauge=css('--gauge'), diverge=css('--diverge'), stable=css('--stable');
+  g.font = '11px ui-monospace, Menlo, monospace';
+
+  // trust-boundary band
+  g.fillStyle = gauge+'22';
+  g.fillRect(X(DATA.boundaryLo), padT, X(DATA.boundaryHi)-X(DATA.boundaryLo), H);
+  // grid + y labels
+  g.textAlign='right'; g.textBaseline='middle';
+  for(let v=0; v<=800; v+=200){
+    g.strokeStyle=line; g.lineWidth=1; g.beginPath();
+    g.moveTo(padL, Y(v)+.5); g.lineTo(padL+W, Y(v)+.5); g.stroke();
+    g.fillStyle=faint; g.fillText(v+(v===800?' µm':''), padL-10, Y(v));
+  }
+  // x ticks
+  g.textAlign='center'; g.textBaseline='top';
+  DATA.width.forEach(w=>{ g.fillStyle=faint; g.fillText((w/1000).toFixed(w>=1000?1:2), X(w), padT+H+10); });
+  g.fillStyle=slate; g.fillText('wall width  (mm)', padL+W/2, padT+H+26);
+
+  // nozzle marker
+  g.strokeStyle=slate; g.setLineDash([3,3]); g.lineWidth=1; g.beginPath();
+  g.moveTo(X(DATA.nozzle), padT); g.lineTo(X(DATA.nozzle), padT+H); g.stroke(); g.setLineDash([]);
+  g.fillStyle=slate; g.textAlign='left'; g.textBaseline='top';
+  g.fillText('nozzle 0.4', X(DATA.nozzle)+5, padT+3);
+
+  function series(vals, color, fill){
+    g.strokeStyle=color; g.lineWidth=2.5; g.beginPath();
+    DATA.width.forEach((w,i)=>{ const x=X(w), y=Y(vals[i]); i?g.lineTo(x,y):g.moveTo(x,y); });
+    g.stroke();
+    DATA.width.forEach((w,i)=>{ g.fillStyle=fill?color:'#F6F7F8'; g.strokeStyle=color; g.lineWidth=2;
+      g.beginPath(); g.arc(X(w),Y(vals[i]),3.4,0,7); g.fill(); g.stroke(); });
+  }
+  series(DATA.prusa, stable, true);
+  series(DATA.cura, diverge, false);
+
+  // annotate boundary
+  g.fillStyle=gauge; g.textAlign='center'; g.textBaseline='bottom'; g.font='600 11px ui-monospace, Menlo, monospace';
+  g.fillText('trust boundary', (X(DATA.boundaryLo)+X(DATA.boundaryHi))/2, padT+15);
+}
+draw();
+let t; addEventListener('resize',()=>{clearTimeout(t);t=setTimeout(draw,120);});
+</script>

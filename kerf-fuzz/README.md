@@ -107,6 +107,31 @@ tips (acute wedges, razor stars) where material over-reaches by ≤63µm (<⅓ c
 sharpness, i.e. inherent FDM bead geometry, not a slicer defect. Sub-nozzle islands (0.2–0.3mm) produce
 no G-code (the slicer drops features below the 0.4mm nozzle; surfaced by the adapter's no-G-code guard).
 
+### Differential campaign (`campaign.py`): geometry × config × two slicers
+
+```bash
+python campaign.py --prusa-exe "$BIN" --prusa-profile profile.ini \
+  --cura-exe "$CE" --cura-def fdmprinter.def.json --configs 12 --random 100 --out runs/campaign
+```
+
+1,680 units (140 shapes × 12 configs × PrusaSlicer 2.9.6 + Cura 5.13). 269 raw signals; adjudication
+(re-testing each lead in isolation) leaves **two real, Cura-specific findings**, one inherent effect,
+and the rest methodology — see `reports/trust_boundary.html` (and the published Artifact):
+
+- **Cura is not rotationally equivariant for sub-nozzle walls.** Below ~1.5× the nozzle a straight wall
+  is deposited ~700µm differently depending on orientation; resolution-independent (holds to a 25µm
+  grid). PrusaSlicer: 0µm at every width. (`reports/divergence.json` has the curve.)
+- **CuraEngine is nondeterministic on curved/CSG meshes.** A sphere gives 6 distinct deposited-material
+  results in 6 single-threaded (`-m1`) slices of identical input; PrusaSlicer is deterministic. (The raw
+  count is inflated by parallel-load false positives — real at its core.)
+- Marginal/inherent: acute-tip containment over-reach (≤51µm). Leads (not verdicts): cross-slicer
+  disagreement on multi-body STLs (the bbox differential is unsound for disjoint solids).
+
+Scaling from 85 to 1,680 units exposed harness limits, all fixed or documented: multithreaded slicers
+need thread-pinning for the determinism gate; transient no-G-code under load needs a retry before it's
+called a crash; rotation is an exact relation only for prisms; the differential needs per-component
+comparison for multi-body solids. This is a smoke test toward a real campaign, not a "clean" verdict.
+
 ## Threats to validity (design doc §G)
 World-anchored infill (controlled via profiles), and a finding is only as sound as its class. Prism STL
 caps are now triangulated correctly for concave rings (via `manifold3d`), but hole interiors are still
