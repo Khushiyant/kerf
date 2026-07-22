@@ -184,6 +184,17 @@ def containment(adapter, instance: Instance, res: int = 200, margin_um: float = 
     return Result("containment", "GATE", worst, worst, n_out > 0, f"{n_out} cells outside footprint")
 
 
+def emi(adapter, original: Instance, mutant: Instance, res: int = 200, tol_mean_um: float = 250.0) -> Result:
+    """GRADED (EMI): an Equivalence-Modulo-Inputs mutant is a *different mesh of the same solid*
+    (subdivided edges, welded duplicates, an inserted coplanar vertex, an identity boolean). A correct
+    slicer MUST deposit the same material. Re-triangulation can shift float coords sub-cell, so we allow
+    the isometry tolerance and flag only a real divergence — a slicer whose output depends on how the
+    same solid was tessellated. Compared translation-normalized."""
+    base = parse(adapter.slice_to_gcode(original))
+    mut = parse(adapter.slice_to_gcode(mutant))
+    return _graded(base, mut, res, tol_mean_um, "emi", cls="GRADED")
+
+
 def differential(adapter_a, adapter_b, instance: Instance, res: int = 200, tol_bbox_um: float = 2000.0) -> Result:
     """GATE (cross-slicer): two slicers must at least agree on WHAT solid to fill — non-empty output
     and the same XY footprint extent. They legitimately differ on infill/perimeter counts, so we only

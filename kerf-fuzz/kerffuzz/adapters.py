@@ -15,6 +15,7 @@ infill lines do NOT rotate with the part. For the isometry relations use a perim
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -72,10 +73,14 @@ class _CliSlicer(SlicerAdapter):
 # (`--arc-fitting`, `--resolution`, `--fill-density`, … are misparsed as input files), so they are
 # baked into an augmented copy of the profile instead — the portable, version-stable way. Skirt/brim/
 # support are disabled so the containment gate stays sound (mm of skirt outside the part would trip it).
+# Perimeter-dominant + deterministic: sparse infill AND solid skin are disabled, because both are laid
+# at a fixed WORLD angle and so do not rotate with the part — leaving them on confounds the isometry
+# relations (a rotated part's skin/infill lines fall differently). Perimeters do transform rigidly.
 _PS_DETERMINISM = {
     "seam_position": "aligned", "spiral_vase": "0", "arc_fitting": "disabled",
     "gcode_resolution": "0.0125", "slice_closing_radius": "0", "avoid_crossing_perimeters": "0",
     "skirts": "0", "brim_width": "0", "brim_type": "no_brim", "support_material": "0",
+    "top_solid_layers": "0", "bottom_solid_layers": "0",
 }
 
 
@@ -85,10 +90,12 @@ class _PrusaSlicer(SlicerAdapter):
 
     name = "prusaslicer"
 
-    def __init__(self, profile_ini: str, exe: str = "prusa-slicer", fill_density: str | None = "0"):
+    def __init__(self, profile_ini: str, exe: str = "prusa-slicer", fill_density: str | None = "0",
+                 overrides: dict | None = None):
         self.profile_ini = profile_ini
         self.exe = exe
         self.fill_density = fill_density
+        self.overrides = overrides or {}  # native PrusaSlicer keys (e.g. from config-space mutation)
 
     def _write_profile(self, d: Path) -> Path:
         cfg, order = {}, []
@@ -101,6 +108,7 @@ class _PrusaSlicer(SlicerAdapter):
         if self.fill_density is not None:
             fd = str(self.fill_density)
             want["fill_density"] = fd if "%" in fd else f"{fd}%"
+        want.update(self.overrides)
         for key, v in want.items():
             if key in cfg:  # only override keys the profile already declares (avoids unknown-key load errors)
                 cfg[key] = f"{key} = {v}"
@@ -134,28 +142,75 @@ class _PrusaSlicer(SlicerAdapter):
             return gpath.read_text()
 
 
-def prusaslicer(profile_ini: str, exe: str = "prusa-slicer", fill_density: str | None = "0") -> _PrusaSlicer:
+def prusaslicer(profile_ini: str, exe: str = "prusa-slicer", fill_density: str | None = "0",
+                overrides: dict | None = None) -> _PrusaSlicer:
     """PrusaSlicer 2.9 (verified on 2.9.6). Windows: exe='prusa-slicer-console.exe'. Pass a self-contained
-    profile .ini (e.g. `PrusaSlicer --save profile.ini` for the defaults, or a GUI-exported config)."""
-    return _PrusaSlicer(profile_ini, exe, fill_density)
+    profile .ini (e.g. `PrusaSlicer --save profile.ini` for the defaults, or a GUI-exported config).
+    `overrides` = native PrusaSlicer keys, e.g. `configs.to_prusa(cfg)` for config-space mutation."""
+    return _PrusaSlicer(profile_ini, exe, fill_density, overrides)
 
 
-def curaengine(definition_json: str, settings: dict | None = None, exe: str = "CuraEngine") -> _CliSlicer:
-    """CuraEngine (Cura 5.13, verified). Cannot read GUI/.curaprofile presets — pass a def.json + `-s`."""
-    s = {
-        "z_seam_type": "back", "adaptive_layer_height_enabled": "false", "infill_pattern": "lines",
-        "infill_offset_x": "0", "infill_offset_y": "0", "fuzzy_skin_enabled": "false",
-        "coasting_enable": "false", "center_object": "false",
-        "mesh_position_x": "0", "mesh_position_y": "0", "mesh_position_z": "0", "infill_sparse_density": "0",
-    }
-    s.update(settings or {})
-    args = ["slice", "-v", "-m1", "-j", "{profile}"]
-    for k, v in s.items():
-        args += ["-s", f"{k}={v}"]
-    args += ["-l", "{stl}", "-o", "{out}"]
-    a = _CliSlicer(exe, definition_json, args)
-    a.name = "curaengine"
-    return a
+# CuraEngine (Cura 5.x) settings baked for determinism + containment soundness. Several newer settings
+# (roofing/flooring) have unresolved formula defaults standalone, so they must be given explicitly;
+# _CuraEngine also self-heals for any shape-specific missing setting via a bounded retry.
+_CURA_BASE = {
+    "z_seam_type": "back", "adaptive_layer_height_enabled": "false", "infill_pattern": "lines",
+    "infill_offset_x": "0", "infill_offset_y": "0", "fuzzy_skin_enabled": "false",
+    "coasting_enable": "false", "center_object": "true", "adhesion_type": "none",
+    "roofing_layer_count": "0", "flooring_layer_count": "0",
+    "machine_width": "300", "machine_depth": "300", "machine_height": "300",
+    # perimeter-only: no world-anchored skin OR infill (both misalign under rotation and break the
+    # isometry relations). density=0 is NOT enough — Cura derives infill_line_distance separately, and
+    # skin comes from top/bottom layer counts + thickness; all must be zeroed.
+    "top_layers": "0", "bottom_layers": "0", "top_bottom_thickness": "0",
+    "infill_sparse_density": "0", "infill_line_distance": "0",
+}
+_CURA_MISSING = re.compile(r"no value given:\s*(\w+)")
+
+
+class _CuraEngine(SlicerAdapter):
+    """CuraEngine (Cura 5.13, verified). Cannot read GUI/.curaprofile presets — pass a def.json + `-s`.
+    Self-heals for settings whose standalone default is an unresolved formula (retries with `-s X=0`)."""
+
+    name = "curaengine"
+
+    def __init__(self, definition_json: str, settings: dict | None = None, exe: str = "CuraEngine",
+                 overrides: dict | None = None):
+        self.definition_json = definition_json
+        self.exe = exe
+        self.settings = dict(_CURA_BASE)
+        self.settings.update(settings or {})
+        self.settings.update(overrides or {})  # native Cura keys (e.g. from config-space mutation)
+
+    def slice_to_gcode(self, instance: Instance) -> str:
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            stl, out = d / "model.stl", d / "out.gcode"
+            stl.write_bytes(instance.to_stl_bytes())
+            extra: dict = {}
+            last = ""
+            for _ in range(16):  # bounded self-heal for unresolved-default settings
+                s = {**self.settings, **extra}
+                args = [self.exe, "slice", "-v", "-j", self.definition_json]
+                for k, v in s.items():
+                    args += ["-s", f"{k}={v}"]
+                args += ["-l", str(stl), "-o", str(out)]
+                r = subprocess.run(args, capture_output=True, timeout=180, text=True)
+                if out.exists() and out.stat().st_size > 0:
+                    return out.read_text()
+                last = (r.stdout or "") + (r.stderr or "")
+                new = [m for m in set(_CURA_MISSING.findall(last)) if m not in extra]
+                if not new:
+                    break
+                for m in new:
+                    extra[m] = "0"
+            raise RuntimeError(f"CuraEngine produced no G-code for {instance.label}: "
+                               f"{chr(10).join(last.splitlines()[-3:])}")
+
+
+def curaengine(definition_json: str, settings: dict | None = None, exe: str = "CuraEngine",
+               overrides: dict | None = None) -> _CuraEngine:
+    return _CuraEngine(definition_json, settings, exe, overrides)
 
 
 def orca(machine_json: str, process_json: str, filament_json: str, exe: str = "orca-slicer") -> _CliSlicer:

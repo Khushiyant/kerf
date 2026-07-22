@@ -82,17 +82,94 @@ def boundary_corpus() -> list[tuple[str, Instance]]:
 
     # CSG DIFFERENCE: a box with a bored-out hole — a boolean solid that exercises watertight-mesh
     # handling and internal-perimeter detection on a true 3D input (not a prism's fake inner walls).
+    # NOTE: meshgen primitives take sizes in MILLIMETRES (print scale ~5-40 mm); prisms use microns.
     if hasattr(meshgen, "box_with_hole"):
         add("csg_box_minus_cylinder", meshgen.box_with_hole())
     elif hasattr(meshgen, "box") and hasattr(meshgen, "cylinder"):
-        box = meshgen.box(20_000, 20_000, 20_000)
-        add("csg_box_minus_cylinder", box.difference(meshgen.cylinder(5000, 30_000)))
+        box = meshgen.box(20, 20, 20)
+        add("csg_box_minus_cylinder", box.difference(meshgen.cylinder(5, 30)))
 
     # CURVED OVERHANG: a sphere — every layer's growing/shrinking radius is a continuous overhang, the
     # worst case for support generation and staircase artifacts.
     if hasattr(meshgen, "sphere"):
-        add("sphere_curved_overhang", meshgen.sphere(15_000))
+        add("sphere_curved_overhang", meshgen.sphere(15))
 
+    return items
+
+
+# ---- bug-rich family sweeps (where slicer bugs historically live) -------------------------------
+
+def thin_wall_sweep() -> list[tuple[str, Instance]]:
+    """Rect walls swept finely across the 0.4 mm nozzle: 1-/2-/3-bead transitions and gap-fill flip
+    exactly here. The wall-count / variable-width-beading logic is a classic divergence point."""
+    out = []
+    for w in (200, 300, 350, 390, 410, 450, 550, 650, 790, 810, 900):
+        out.append((f"thinwall_{w}um", _prism(f"thinwall_{w}um", shapes.rect(24_000, w))))
+    return out
+
+
+def hole_tolerance_sweep() -> list[tuple[str, Instance]]:
+    """A 30 mm plate with one central hole whose diameter shrinks toward the nozzle (slicers drop or
+    merge sub-nozzle holes), plus the thin ligament between a hole and the outer wall."""
+    out = []
+    for d_um in (400, 600, 900, 1400, 2200, 4000):
+        out.append((f"hole_d{d_um}um", _prism(f"hole_d{d_um}um", shapes.rect(30_000, 30_000),
+                    holes=[shapes.regular_polygon(32, d_um // 2)])))
+    for gap in (250, 400, 700, 1200):  # ligament between hole edge and outer wall
+        r_hole = 8000
+        side = 2 * (r_hole + gap) + 1600
+        out.append((f"ligament_{gap}um", _prism(f"ligament_{gap}um", shapes.rect(side, side),
+                    holes=[shapes.regular_polygon(32, r_hole)])))
+    return out
+
+
+def tall_seam_sweep() -> list[tuple[str, Instance]]:
+    """Tall prisms (many layers) — seam placement must stay consistent up the Z stack; a shape whose
+    seam wanders layer-to-layer is a real defect this exercises (determinism + isometry catch it)."""
+    out = []
+    for n in (20, 50, 90):
+        out.append((f"tall_hex_{n}layer", shapes.Prism(shapes.regular_polygon(6, 10_000),
+                    n_layers=n, name=f"tall_hex_{n}layer")))
+        out.append((f"tall_square_{n}layer", shapes.Prism(shapes.rect(16_000, 16_000),
+                    n_layers=n, name=f"tall_square_{n}layer")))
+    return out
+
+
+def _mesh_families() -> list[tuple[str, Instance]]:
+    """3D families that need a real solid: multi-island layers, bridging, near-degenerate facets."""
+    out: list[tuple[str, Instance]] = []
+    try:
+        from kerffuzz import meshgen
+    except Exception:
+        return out
+    # (meshgen primitive sizes are in MILLIMETRES; translate is in microns.)
+    # MULTI-ISLAND: two disjoint 12 mm blocks 22 mm apart — per-layer island handling + travel between.
+    if hasattr(meshgen, "box"):
+        a = meshgen.box(12, 12, 6).translate(-11_000, 0)
+        b = meshgen.box(12, 12, 6).translate(11_000, 0)
+        out.append(("multi_island_2box", meshgen.union(a, b)))
+    # BRIDGING: a 30x16x8 mm slab with a 10 mm-wide tunnel through Y — the top layers bridge the gap.
+    if hasattr(meshgen, "box"):
+        try:
+            out.append(("bridge_tunnel", meshgen.box(30, 16, 8).difference(meshgen.box(10, 20, 4))))
+        except Exception:
+            pass
+    # NEAR-DEGENERATE FACETS: subdivide then jitter sub-micron -> sliver triangles (robustness/crash).
+    if hasattr(meshgen, "box") and hasattr(meshgen, "subdivide_edges") and hasattr(meshgen, "jitter_vertices"):
+        import numpy as _np
+        base = meshgen.subdivide_edges(meshgen.box(18, 18, 8))
+        out.append(("near_degenerate_facets", meshgen.jitter_vertices(base, _np.random.default_rng(0), 0.5)))
+    return out
+
+
+def campaign_corpus(rng: np.random.Generator, n_random: int) -> list[tuple[str, Instance]]:
+    """The scaled corpus: curated boundary + the bug-rich family sweeps + 3D families + random."""
+    items = list(boundary_corpus())
+    items += thin_wall_sweep()
+    items += hole_tolerance_sweep()
+    items += tall_seam_sweep()
+    items += _mesh_families()
+    items += random_corpus(rng, n_random)
     return items
 
 
