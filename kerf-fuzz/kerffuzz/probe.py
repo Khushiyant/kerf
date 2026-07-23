@@ -200,28 +200,31 @@ def _components(cells: set) -> list:
     return comps
 
 
-def differential_by_component(adapter_a, adapter_b, instance, res: int = 200, tol_um: float = 2000.0) -> dict:
-    """Per-connected-component footprint comparison — sound for multi-body STLs, unlike a single bbox.
-    Matches components greedily by size and compares each one's extent; a disjoint layout no longer
-    false-positives just because two slicers ordered/placed its bodies differently."""
+def _max_bodies_per_layer(adapter, instance, res):
+    """How many disjoint bodies the slicer deposits, counted PER LAYER (not on a Z-flattened
+    projection, which merges bodies that never touch in any single layer)."""
+    import json
+
     import pykerf as k
 
-    def comp_extents(ad):
-        occ = k.occupancy(k.parse_gcode(ad.slice_to_gcode(instance))[0], res)
-        import json
-        cells = {(i, j) for L in json.loads(occ)["layers"] for i, j in L["cells"]}
-        ex = []
-        for comp in _components(cells):
-            xs = [i for i, _ in comp]
-            ys = [j for _, j in comp]
-            ex.append(((max(xs) - min(xs)) * res, (max(ys) - min(ys)) * res))
-        return sorted(ex, key=lambda e: -e[0] * e[1])
+    occ = json.loads(k.occupancy(k.parse_gcode(adapter.slice_to_gcode(instance))[0], res))
+    best = 0
+    for L in occ["layers"]:
+        cells = {(i, j) for i, j in L["cells"]}
+        if cells:
+            best = max(best, len(_components(cells)))
+    return best
 
-    ea, eb = comp_extents(adapter_a), comp_extents(adapter_b)
-    if len(ea) != len(eb):
-        return {"verdict": "DISAGREE", "detail": f"{adapter_a.name} has {len(ea)} bodies, {adapter_b.name} has {len(eb)}"}
-    worst = 0.0
-    for (aw, ah), (bw, bh) in zip(ea, eb):
-        worst = max(worst, abs(aw - bw), abs(ah - bh))
-    return {"verdict": "DISAGREE" if worst > tol_um else "agree", "worst_um": worst,
-            "detail": f"{len(ea)} bodies, worst per-body extent delta {worst:.0f}um"}
+
+def differential_by_component(adapter_a, adapter_b, instance, res: int = 200) -> dict:
+    """Do two slicers agree on how many disjoint bodies the part has? Counted per-layer AND required to
+    be stable across two grid resolutions — a body-count difference that flips when the raster changes
+    is sitting on a gap ~ the cell size and is a rasterization artifact, not a real disagreement (this
+    is the check that refuted the 'PrusaSlicer bridges an air gap' candidate)."""
+    ar, br = _max_bodies_per_layer(adapter_a, instance, res), _max_bodies_per_layer(adapter_b, instance, res)
+    fine = max(res // 2, 20)
+    af, bf = _max_bodies_per_layer(adapter_a, instance, fine), _max_bodies_per_layer(adapter_b, instance, fine)
+    stable = (ar != br) and (af != bf) and ((ar > br) == (af > bf))
+    return {"verdict": "DISAGREE" if stable else "agree",
+            "detail": f"bodies {adapter_a.name}:{ar}/{adapter_b.name}:{br} @res={res}, "
+                      f"{af}/{bf} @res={fine}" + ("" if stable else " — not stable across grids, so no real disagreement")}

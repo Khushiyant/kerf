@@ -168,6 +168,9 @@ _CURA_BASE = {
     "coasting_enable": "false", "center_object": "true", "adhesion_type": "none",
     "roofing_layer_count": "0", "flooring_layer_count": "0",
     "machine_width": "300", "machine_depth": "300", "machine_height": "300",
+    # initial layer == layer height: Cura's default 0.3mm first layer, divided into by kerf's
+    # extrusion-per-thickness width inference, inflates layer-0 bead width (false containment leaks).
+    "layer_height": "0.2", "layer_height_0": "0.2",
     # perimeter-only: no world-anchored skin OR infill (both misalign under rotation and break the
     # isometry relations). density=0 is NOT enough — Cura derives infill_line_distance separately, and
     # skin comes from top/bottom layer counts + thickness; all must be zeroed.

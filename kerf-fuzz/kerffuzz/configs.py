@@ -21,6 +21,9 @@ AXES = {
 def to_prusa(cfg: dict) -> dict:
     return {
         "layer_height": f"{cfg['layer_height']}",
+        # keep the FIRST layer the same thickness as the rest: kerf infers bead width from
+        # extrusion ÷ layer thickness, so a mismatched initial layer inflates layer-0 width inference.
+        "first_layer_height": f"{cfg['layer_height']}",
         "perimeters": str(cfg["perimeters"]),
         "seam_position": cfg["seam"],
     }
@@ -32,6 +35,7 @@ _CURA_SEAM = {"aligned": "sharpest_corner", "rear": "back", "nearest": "shortest
 def to_cura(cfg: dict) -> dict:
     return {
         "layer_height": f"{cfg['layer_height']}",
+        "layer_height_0": f"{cfg['layer_height']}",  # match initial layer to configured (see to_prusa note)
         "wall_line_count": str(cfg["perimeters"]),
         "z_seam_type": _CURA_SEAM[cfg["seam"]],
     }
