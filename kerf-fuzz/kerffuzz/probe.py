@@ -133,6 +133,35 @@ def determinism(adapter, instance, n: int = 6, res: int = 50, fine: int = 20, fl
                           f"{'n/a' if off_mag is None else round(off_mag)}um. {mech}"}
 
 
+def emi(adapter, original, mutant, n: int = 4, fine: int = 20, floor_um: float = 5.0) -> dict:
+    """Sound EMI (tessellation-dependence) probe. A mutant is the SAME solid meshed differently, so a
+    correct slicer must deposit the same material. But the slicer's own run-to-run jitter (see the
+    determinism defect) would masquerade as an EMI violation — so we compare the original↔mutant
+    divergence against the original↔original BASELINE. An EMI bug is divergence that clearly EXCEEDS the
+    slicer's inherent nondeterminism, not merely equals it. Magnitudes measured on a fine grid."""
+    import json
+    import pykerf as k
+
+    with tempfile.TemporaryDirectory() as d:
+        po = os.path.join(d, "o.stl")
+        pm = os.path.join(d, "m.stl")
+        with open(po, "wb") as f:
+            f.write(original.to_stl_bytes())
+        with open(pm, "wb") as f:
+            f.write(mutant.to_stl_bytes())
+        orig = [k.parse_gcode(adapter.slice_stl_path(po))[0] for _ in range(n)]
+        mut = [k.parse_gcode(adapter.slice_stl_path(pm))[0] for _ in range(n)]
+    # baseline: the slicer's own jitter on the original
+    base = max((json.loads(k.graded_diff(orig[0], orig[i], fine)).get("max_um") or 0.0) for i in range(1, n)) if n > 1 else 0.0
+    # cross: best-case alignment between a mutant run and any original run (min over pairs);
+    # if even the best match far exceeds the baseline jitter, the output is tessellation-dependent.
+    cross = min(json.loads(k.graded_diff(mut[0], orig[i], fine)).get("max_um") or 0.0 for i in range(n))
+    violation = cross > max(2 * base, floor_um) and cross - base >= floor_um
+    return {"verdict": "EMI-VIOLATION" if violation else "ok", "cross_um": round(cross, 1),
+            "baseline_um": round(base, 1),
+            "detail": f"original↔mutant {cross:.0f}um vs own-jitter baseline {base:.0f}um at res={fine}"}
+
+
 def mesh_valid(instance) -> tuple[bool, str]:
     """Gate meshes before slicing: an invalid (non-manifold / non-watertight) STL can't be a slicer bug.
     Prisms (which have an exact 2D program) always pass. Returns (ok, reason)."""
