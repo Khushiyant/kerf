@@ -126,14 +126,15 @@ class _PrusaSlicer(SlicerAdapter):
                 return f"{(min(xs) + max(xs)) / 2:g},{(min(ys) + max(ys)) / 2:g}"
         return "100,100"
 
-    def slice_to_gcode(self, instance: Instance) -> str:
+    def slice_stl_path(self, stl_path: str, launcher: list | None = None) -> str:
+        """Slice an EXISTING STL file (bytes fixed by the caller). `launcher` prepends a wrapper argv
+        (e.g. the ASLR-disabling posix_spawn launcher) so the determinism protocol can pin address layout."""
         with tempfile.TemporaryDirectory() as d:
             d = Path(d)
-            stl, out = d / "model.stl", d / "out.gcode"
-            stl.write_bytes(instance.to_stl_bytes())
+            out = d / "out.gcode"
             ini = self._write_profile(d)
-            args = [self.exe, "--export-gcode", "--load", str(ini), "--output", str(out),
-                    "--dont-arrange", "--center", self._bed_center(), str(stl)]
+            args = (launcher or []) + [self.exe, "--export-gcode", "--load", str(ini), "--output", str(out),
+                    "--dont-arrange", "--center", self._bed_center(), stl_path]
             r = None
             for _ in range(2):  # retry once: no-G-code under heavy parallel load can be transient
                 r = subprocess.run(args, capture_output=True, timeout=180, text=True)
@@ -141,7 +142,13 @@ class _PrusaSlicer(SlicerAdapter):
                 if gpath is not None:
                     return gpath.read_text()
             tail = "\n".join((r.stderr or r.stdout or "").splitlines()[-3:])
-            raise RuntimeError(f"{self.exe} produced no G-code for {instance.label}: {tail}")
+            raise RuntimeError(f"{self.exe} produced no G-code: {tail}")
+
+    def slice_to_gcode(self, instance: Instance) -> str:
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "model.stl"
+            p.write_bytes(instance.to_stl_bytes())
+            return self.slice_stl_path(str(p))
 
 
 def prusaslicer(profile_ini: str, exe: str = "prusa-slicer", fill_density: str | None = "0",
@@ -185,19 +192,19 @@ class _CuraEngine(SlicerAdapter):
         self.settings.update(settings or {})
         self.settings.update(overrides or {})  # native Cura keys (e.g. from config-space mutation)
 
-    def slice_to_gcode(self, instance: Instance) -> str:
+    def slice_stl_path(self, stl_path: str, launcher: list | None = None) -> str:
+        """Slice an EXISTING STL file. `launcher` prepends a wrapper argv (e.g. the ASLR-disabling
+        launcher) so the determinism protocol can rule address layout in or out as the cause."""
         with tempfile.TemporaryDirectory() as d:
-            d = Path(d)
-            stl, out = d / "model.stl", d / "out.gcode"
-            stl.write_bytes(instance.to_stl_bytes())
+            out = Path(d) / "out.gcode"
             extra: dict = {}
             last = ""
             for _ in range(16):  # bounded self-heal for unresolved-default settings
                 s = {**self.settings, **extra}
-                args = [self.exe, "slice", "-v", f"-m{self.threads}", "-j", self.definition_json]
+                args = (launcher or []) + [self.exe, "slice", "-v", f"-m{self.threads}", "-j", self.definition_json]
                 for k, v in s.items():
                     args += ["-s", f"{k}={v}"]
-                args += ["-l", str(stl), "-o", str(out)]
+                args += ["-l", stl_path, "-o", str(out)]
                 r = subprocess.run(args, capture_output=True, timeout=180, text=True)
                 if out.exists() and out.stat().st_size > 0:
                     return out.read_text()
@@ -207,8 +214,13 @@ class _CuraEngine(SlicerAdapter):
                     break
                 for m in new:
                     extra[m] = "0"
-            raise RuntimeError(f"CuraEngine produced no G-code for {instance.label}: "
-                               f"{chr(10).join(last.splitlines()[-3:])}")
+            raise RuntimeError(f"CuraEngine produced no G-code: {chr(10).join(last.splitlines()[-3:])}")
+
+    def slice_to_gcode(self, instance: Instance) -> str:
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "model.stl"
+            p.write_bytes(instance.to_stl_bytes())
+            return self.slice_stl_path(str(p))
 
 
 def curaengine(definition_json: str, settings: dict | None = None, exe: str = "CuraEngine",
