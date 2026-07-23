@@ -118,15 +118,18 @@ python campaign.py --prusa-exe "$BIN" --prusa-profile profile.ini \
 (re-testing each lead in isolation) left **8 surviving** — one filable defect, one quantified boundary,
 one inherent effect, and the rest leads/harness — see `reports/trust_boundary.html` (published Artifact):
 
-- **CuraEngine is nondeterministic on the sphere path** *(filable defect)*. A frozen STL (md5 re-checked
-  identical before every run), sliced 6× single-threaded (`-m1`), gives **4 distinct deposited-material
-  results**; PrusaSlicer gives 1. Threading and ASLR are both **experimentally excluded** — it stays
-  nondeterministic under `-m1` + `OMP_NUM_THREADS=1` *and* with ASLR disabled (address pinned via
-  `posix_spawn` `_POSIX_SPAWN_DISABLE_ASLR`, verified constant). Divergence is coordinate-level (same
-  layers/point counts, ~200µm jitter), sphere-specific (cylinder + box deterministic) — most consistent
-  with an uninitialized-memory read, mechanism unconfirmed. Minimal repro:
-  `reports/cura_nondeterminism_sphere.stl`. (macOS note: `setarch -R` is Linux-only; the ASLR-off control
-  used a `posix_spawn` launcher.)
+- **CuraEngine is nondeterministic on doubly-curved surfaces** *(filable defect)*. A frozen STL (md5
+  re-checked before every slice), single-threaded (`-m1`), produces run-to-run differences PrusaSlicer
+  does not on the same bytes. Threading and ASLR are **experimentally excluded** (persists under
+  `OMP_NUM_THREADS=1` *and* with ASLR disabled via `posix_spawn _POSIX_SPAWN_DISABLE_ASLR`, address
+  verified constant) → suspect uninitialized read. **Two honesty corrections** the hunt forced:
+  (a) **magnitude ~28µm (sphere) / ~40µm (torus), not ~200µm** — the coarse 200µm-grid fingerprint
+  inflated it ~10× (a ~30µm jitter flips a whole cell); measured on a 20µm grid the true displacement is
+  sub-cell, with flat/ruled controls (box/cylinder/cone) at exactly **0µm**. (b) **Trigger localized to
+  doubly-curved (non-developable) surfaces, not poles** — a torus (no poles) is just as nondeterministic;
+  a 15-shape hunt across segment counts, sub-layer radii, hemispheres, bands, capsules, and torus is
+  **one bug, not 15**. Minimal repro: `reports/cura_nondeterminism_sphere.stl`. (macOS note: `setarch -R`
+  is Linux-only; the ASLR-off control uses a `posix_spawn` launcher, auto-compiled by `probe.py`.)
 - **Thin-wall rotational non-equivariance, quantified** *(known, not a defect)*. Below ~1.5× nozzle Cura
   deposits a wall ~700µm differently by orientation (resolution-independent to a 25µm grid); PrusaSlicer:
   0µm. **Both engines run Arachne** (PrusaSlicer ported it in 2.5) and this orientation-sensitivity at the
