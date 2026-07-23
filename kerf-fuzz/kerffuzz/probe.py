@@ -67,32 +67,70 @@ def _fingerprints(adapter, stl_path: str, n: int, launcher: list | None, res: in
     return out
 
 
-def determinism(adapter, instance, n: int = 6, res: int = 200) -> dict:
-    """Frozen-bytes determinism with mechanism adjudication baked in. Returns a verdict dict:
-    verdict ∈ {deterministic, NONDETERMINISTIC, no_gcode}. When NONDETERMINISTIC, the ASLR-off control
-    has already run, so `mechanism` distinguishes a real single-thread defect from an ASLR artifact."""
+def _slice_run(adapter, stl_path, launcher, res):
+    import pykerf as k
+
+    try:
+        lo = k.parse_gcode(adapter.slice_stl_path(stl_path, launcher=launcher))[0]
+        return k.material_fingerprint(lo, res), lo
+    except Exception as e:
+        return f"ERR:{type(e).__name__}", None
+
+
+def _worst_divergence(runs, fine):
+    """Worst run-to-run material divergence in MICRONS, measured at a FINE grid so the number is the
+    true toolpath displacement — not the cell size. (Measuring at a coarse grid inflates a tiny jitter
+    to a whole cell: a ~15um difference reads as 200um at res=200. Flat/ruled shapes give 0 here.)"""
+    import json
+
+    import pykerf as k
+
+    los = [lo for _, lo in runs if lo is not None]
+    worst = 0.0
+    for i in range(1, len(los)):
+        worst = max(worst, json.loads(k.graded_diff(los[0], los[i], fine)).get("max_um") or 0.0)
+    return worst
+
+
+def determinism(adapter, instance, n: int = 6, res: int = 50, fine: int = 20, floor_um: float = 5.0) -> dict:
+    """Frozen-bytes determinism, reporting the HONEST magnitude. Verdict ∈ {deterministic,
+    NONDETERMINISTIC, no_gcode}. Divergence is measured at a fine grid (`fine`) so the reported number is
+    the true run-to-run toolpath displacement; anything below `floor_um` is treated as bit-exact (flat/
+    ruled shapes measure 0). A real (>= floor) divergence then gets the ASLR-off control to classify the
+    mechanism. `magnitude_um` is the load-bearing number — a coarse fingerprint over-states it ~10x."""
     with tempfile.TemporaryDirectory() as d:
         stl = os.path.join(d, "m.stl")
         with open(stl, "wb") as f:
             f.write(instance.to_stl_bytes())
-        on = _fingerprints(adapter, stl, n, None, res)
-        if any(isinstance(x, str) and x.startswith("ERR") for x in on):
-            return {"verdict": "no_gcode", "on_distinct": None, "detail": next(x for x in on if isinstance(x, str))}
-        d_on = len(set(on))
-        if d_on == 1:
-            return {"verdict": "deterministic", "on_distinct": 1}
-        # nondeterministic on identical bytes — exclude ASLR before naming it
+        md5 = hashlib.md5(open(stl, "rb").read()).hexdigest()
+        runs = []
+        for _ in range(n):
+            assert hashlib.md5(open(stl, "rb").read()).hexdigest() == md5, "input STL changed mid-probe"
+            runs.append(_slice_run(adapter, stl, None, res))
+        if any(isinstance(fp, str) and fp.startswith("ERR") for fp, _ in runs):
+            return {"verdict": "no_gcode", "detail": next(fp for fp, _ in runs if isinstance(fp, str))}
+        mag = _worst_divergence(runs, fine)
+        if mag < floor_um:
+            return {"verdict": "deterministic", "magnitude_um": round(mag, 1)}
+        # real divergence — exclude ASLR
         launcher = ensure_noaslr()
-        off = _fingerprints(adapter, stl, n, [launcher], res) if launcher else None
-        d_off = len(set(off)) if off else None
-        if d_off == 1:
+        off_mag = None
+        if launcher:
+            off_runs = []
+            for _ in range(n):
+                off_runs.append(_slice_run(adapter, stl, [launcher], res))
+            off_mag = _worst_divergence(off_runs, fine) if all(lo is not None for _, lo in off_runs) else None
+        if off_mag is not None and off_mag < floor_um:
             mech = "address-layout dependent (ASLR) — determinism returns with ASLR off"
-        elif d_off and d_off > 1:
+        elif off_mag is not None:
             mech = "NOT ASLR (still nondeterministic with address pinned) — suspect uninitialized read"
         else:
             mech = "ASLR control unavailable on this platform"
-        return {"verdict": "NONDETERMINISTIC", "on_distinct": d_on, "off_distinct": d_off,
-                "mechanism": mech, "detail": f"{d_on}/{n} distinct (ASLR on), {d_off}/{n} (ASLR off)"}
+        sub = " (sub-cell)" if mag < res else ""
+        return {"verdict": "NONDETERMINISTIC", "magnitude_um": round(mag, 1),
+                "off_magnitude_um": None if off_mag is None else round(off_mag, 1), "mechanism": mech,
+                "detail": f"identical input diverges ~{mag:.0f}um{sub} at res={fine}; ASLR-off ~"
+                          f"{'n/a' if off_mag is None else round(off_mag)}um. {mech}"}
 
 
 def mesh_valid(instance) -> tuple[bool, str]:
