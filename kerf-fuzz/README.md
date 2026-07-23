@@ -120,15 +120,21 @@ one inherent effect, and the rest leads/harness — see `reports/trust_boundary.
 
 - **CuraEngine is nondeterministic on the sphere path** *(filable defect)*. A frozen STL (md5 re-checked
   identical before every run), sliced 6× single-threaded (`-m1`), gives **4 distinct deposited-material
-  results**; PrusaSlicer gives 1. Sphere-specific (cylinder and box are deterministic), ~200µm spread
-  (≈1 cell), likely ASLR + pointer-keyed iteration since each slice is a fresh process. Minimal repro:
-  `reports/cura_nondeterminism_sphere.stl`.
+  results**; PrusaSlicer gives 1. Threading and ASLR are both **experimentally excluded** — it stays
+  nondeterministic under `-m1` + `OMP_NUM_THREADS=1` *and* with ASLR disabled (address pinned via
+  `posix_spawn` `_POSIX_SPAWN_DISABLE_ASLR`, verified constant). Divergence is coordinate-level (same
+  layers/point counts, ~200µm jitter), sphere-specific (cylinder + box deterministic) — most consistent
+  with an uninitialized-memory read, mechanism unconfirmed. Minimal repro:
+  `reports/cura_nondeterminism_sphere.stl`. (macOS note: `setarch -R` is Linux-only; the ASLR-off control
+  used a `posix_spawn` launcher.)
 - **Thin-wall rotational non-equivariance, quantified** *(known, not a defect)*. Below ~1.5× nozzle Cura
   deposits a wall ~700µm differently by orientation (resolution-independent to a 25µm grid); PrusaSlicer:
-  0µm. But **both engines run Arachne** (PrusaSlicer ported it in 2.5) and this orientation-sensitivity at
-  the 2→1 transition is known — so it is not a Cura-specific defect. Equalizing the obvious Arachne params
-  (`min_bead_width`, `min_feature_size`, `wall_transition_length`) did *not* reconcile them, so the exact
-  cause is open. The contribution is the measurement, not the phenomenon. (`reports/divergence.json`.)
+  0µm. **Both engines run Arachne** (PrusaSlicer ported it in 2.5) and this orientation-sensitivity at the
+  2→1 transition is known — not a Cura defect. Equalizing the obvious Arachne params (`min_bead_width`,
+  `min_feature_size`, `wall_transition_length`) did *not* reconcile them, which points at a **substrate**
+  difference: CuraEngine computes on an integer-micron grid (ClipperLib) so a rotated wall quantizes
+  before Arachne runs; PrusaSlicer's port doesn't share that grid. The contribution is the measurement,
+  not the phenomenon. (`reports/divergence.json`.)
 - Marginal/inherent: acute-tip containment over-reach (≤51µm). Leads: cross-slicer disagreement on
   multi-body STLs (the bbox differential is unsound for disjoint solids). Harness: determinism inflation
   under parallel load (pin `-m1`) and transient no-G-code under load (retry once) — both fixed.
